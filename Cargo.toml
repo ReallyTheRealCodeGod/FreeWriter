@@ -1,0 +1,26 @@
+[package]
+name = "writer"
+version = "0.1.0"
+edition = "2024"
+description = "A distraction-free writing app that locks you onto the page until you reach your goal."
+publish = false
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+dirs = "7.0.0"
+eframe = "0.37.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+egui_kittest = { version = "0.37.0", features = ["eframe", "wgpu"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+
+[profile.release]
+lto = true
+codegen-units = 1

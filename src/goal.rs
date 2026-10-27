@@ -56,6 +56,16 @@ impl Goal {
         }
     }
 
+    /// The goal as it would be typed on the start line: `500`, `25m`, `90s`.
+    /// `parse` reads it back.
+    pub fn input(self) -> String {
+        match self {
+            Goal::Words(n) => n.to_string(),
+            Goal::Time(s) if s % 60 == 0 => format!("{}m", s / 60),
+            Goal::Time(s) => format!("{s}s"),
+        }
+    }
+
     /// How far along the session is, from 0 to 1.
     pub fn progress(self, words: usize, elapsed: Duration) -> f32 {
         let fraction = match self {
@@ -101,6 +111,14 @@ mod tests {
         assert_eq!(Goal::Time(60).describe(), "1 minute");
         assert_eq!(Goal::Time(25 * 60).describe(), "25 minutes");
         assert_eq!(Goal::Time(90).describe(), "90 seconds");
+    }
+
+    #[test]
+    fn input_reads_back_as_the_same_goal() {
+        for goal in [Goal::Words(500), Goal::Time(25 * 60), Goal::Time(90)] {
+            assert_eq!(Goal::parse(&goal.input()), Ok(Some(goal)));
+        }
+        assert_eq!(Goal::Time(25 * 60).input(), "25m");
     }
 
     #[test]

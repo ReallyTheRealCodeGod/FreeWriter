@@ -2,35 +2,54 @@ use std::fs;
 use std::path::PathBuf;
 
 /// Settings from `%APPDATA%\writer\settings.toml`. There's no settings screen;
-/// the file is edited by hand. Currently it understands one line:
+/// the file is edited by hand. It understands two lines:
 ///
 /// ```toml
-/// panic_exit = true
+/// panic_exit = true   # Esc can end a session early, with a long sentence
+/// backspace = false   # a pure typewriter: no erasing on the page
 /// ```
-#[derive(Default)]
 pub struct Settings {
     /// Allows leaving a session early by typing a long sentence.
     pub panic_exit: bool,
+    /// Whether Backspace can take back letters typed this session.
+    pub backspace: bool,
 }
 
-pub fn path() -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join("writer").join("settings.toml"))
+impl Default for Settings {
+    fn default() -> Self {
+        Self { panic_exit: false, backspace: true }
+    }
+}
+
+/// The folder the settings, the log and the running session live in.
+pub fn dir() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join("writer"))
 }
 
 impl Settings {
     pub fn load() -> Self {
-        path()
-            .and_then(|path| fs::read_to_string(path).ok())
+        dir()
+            .and_then(|dir| fs::read_to_string(dir.join("settings.toml")).ok())
             .map(|text| Self::parse(&text))
             .unwrap_or_default()
     }
 
     fn parse(text: &str) -> Self {
-        let panic_exit = text
-            .lines()
-            .filter_map(|line| line.split('#').next()?.split_once('='))
-            .any(|(key, value)| key.trim() == "panic_exit" && value.trim() == "true");
-        Self { panic_exit }
+        let mut settings = Self::default();
+        let lines = text.lines().filter_map(|line| line.split('#').next()?.split_once('='));
+        for (key, value) in lines {
+            let value = match value.trim() {
+                "true" => true,
+                "false" => false,
+                _ => continue,
+            };
+            match key.trim() {
+                "panic_exit" => settings.panic_exit = value,
+                "backspace" => settings.backspace = value,
+                _ => {}
+            }
+        }
+        settings
     }
 }
 
@@ -45,5 +64,14 @@ mod tests {
         assert!(!Settings::parse("panic_exit = false").panic_exit);
         assert!(!Settings::parse("# panic_exit = true").panic_exit);
         assert!(!Settings::parse("").panic_exit);
+    }
+
+    #[test]
+    fn backspace_is_on_unless_turned_off() {
+        assert!(Settings::parse("").backspace);
+        assert!(Settings::parse("backspace = maybe").backspace);
+        assert!(!Settings::parse("backspace = false").backspace);
+        let both = Settings::parse("panic_exit = true\nbackspace = false\n");
+        assert!(both.panic_exit && !both.backspace);
     }
 }

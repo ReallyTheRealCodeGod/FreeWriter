@@ -5,7 +5,9 @@
 
 mod app;
 mod goal;
+mod icon;
 mod lock;
+mod logbook;
 mod page;
 mod settings;
 
@@ -20,11 +22,16 @@ fn main() {
     // `--pages D:\Notes` keeps the pages somewhere other than Documents\Writing.
     let pages = option(&args, "--pages").map_or_else(page::pages_dir, Into::into);
 
-    let viewport = egui::ViewportBuilder::default().with_title("Writer");
+    let mut viewport = egui::ViewportBuilder::default().with_title("Writer");
+    if let Some(icon) = icon::icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let viewport = if windowed {
         viewport.with_inner_size([900.0, 700.0])
     } else {
-        viewport.with_fullscreen(true).with_decorations(false)
+        // The page goes on the primary monitor; the others get blank covers.
+        let primary = lock::monitors().primary;
+        viewport.with_fullscreen(true).with_decorations(false).with_monitor(primary)
     };
     let options = eframe::NativeOptions { viewport, ..Default::default() };
 
@@ -34,7 +41,8 @@ fn main() {
         Box::new(move |cc| {
             load_typewriter_font(&cc.egui_ctx);
             let settings = settings::Settings::load();
-            Ok(Box::new(app::WriterApp::new(settings, windowed, pages, goal)))
+            let logbook = settings::dir().map(logbook::Logbook::new);
+            Ok(Box::new(app::WriterApp::new(settings, windowed, pages, logbook, goal)))
         }),
     );
     if let Err(error) = result {

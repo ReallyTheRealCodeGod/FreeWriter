@@ -77,6 +77,54 @@ sentence, and typing it exactly lets you leave early.
 Courier New (ships with Windows; loaded from the system fonts folder, not
 bundled) in black on a white page. Nothing else on screen.
 
+## Menu (before a session)
+
+A way back to what you've written, without leaving the typewriter. It only
+exists on the start screen; once a session starts, there's no menu and no
+mouse.
+
+- **Opening it:** a faint `Menu` in the top-left corner of the start screen.
+  Click it (or press Tab). The mouse pointer shows on the start screen and
+  in the menu, and is hidden again while writing.
+- **The list:** your pages, newest first, then any saved copies, each with
+  its word count, in the same Courier as the page:
+
+      Menu
+
+      Your pages
+        Today       27 October 2026         612 words
+        Thursday    22 October 2026         140 words
+
+      Saved copies
+        Short story                         612 words
+
+      Open the Writing folder
+
+      Esc to go back
+
+  Click a line, or move with Up/Down and press Enter. The line under the
+  pointer (or the keys) gets the same faint bar as the typing caret.
+  Days within the last week are named (Today, Yesterday, Thursday); older
+  ones show just the date. The wheel scrolls a long list.
+- **Reading a page:** the page opens on the white paper, read-only, from the
+  top. The wheel, PageUp/PageDown, Up/Down and Home/End scroll. Nothing can
+  be typed into it. Along the bottom: `Save a copy · Back`. Esc goes back to
+  the list.
+- **Save a copy:** asks for a name on one line, like the goal:
+
+      Save as: Short story_
+      Enter saves it as Documents\Writing\Saved\Short story.txt. Esc cancels.
+
+  The copy is a plain text file in a `Saved` folder next to the pages
+  (written the same safe way as the pages). Characters Windows doesn't allow
+  in file names can't be typed. If a copy with that name exists, the line
+  says so and a second Enter replaces it. Saved copies show up in the menu
+  and read the same way.
+- **Open the Writing folder** opens it in Explorer, for anything else
+  (printing, opening in Word, deleting).
+- Esc from the list goes back to the start line, with whatever goal you'd
+  typed still there.
+
 ## Out of scope
 
 Website/app blocking (that's Cold Turkey *Blocker*), formatting, file picker,

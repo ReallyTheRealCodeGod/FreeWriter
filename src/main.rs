@@ -8,6 +8,7 @@ mod goal;
 mod icon;
 mod lock;
 mod logbook;
+mod menu;
 mod page;
 mod settings;
 

@@ -12,21 +12,22 @@ use crate::goal::Goal;
 use crate::icon;
 use crate::lock::{self, Monitors};
 use crate::logbook::{self, Entry, Logbook, Outcome};
+use crate::menu::{self, Menu};
 use crate::page::{self, Page};
 use crate::settings::Settings;
 
 const PAPER: Color32 = Color32::WHITE;
-const INK: Color32 = Color32::from_rgb(0x1a, 0x1a, 0x1a);
-const FAINT: Color32 = Color32::from_rgb(0x9a, 0x9a, 0x9a);
+pub const INK: Color32 = Color32::from_rgb(0x1a, 0x1a, 0x1a);
+pub const FAINT: Color32 = Color32::from_rgb(0x9a, 0x9a, 0x9a);
 
-const TEXT_SIZE: f32 = 20.0;
-const NOTE_SIZE: f32 = 14.0;
+pub const TEXT_SIZE: f32 = 20.0;
+pub const NOTE_SIZE: f32 = 14.0;
 /// Width of the column in characters, like a typewriter's margins.
 const COLUMN: f32 = 65.0;
 /// How much of the end of the page to lay out; plenty to fill the screen.
 const TAIL_BYTES: usize = 20_000;
 /// How far one notch of the mouse wheel reads back, as egui scrolls.
-const LINE_SCROLL: f32 = 40.0;
+pub const LINE_SCROLL: f32 = 40.0;
 
 const AUTOSAVE_EVERY: Duration = Duration::from_secs(3);
 /// Even with nothing typed, the running session's log line is brought up to
@@ -75,6 +76,8 @@ struct Start {
     unfinished_from: Option<NaiveTime>,
     /// "Yesterday: 523 words · 4 days in a row"
     record: Option<String>,
+    /// The menu, while it's open over the start line.
+    menu: Option<Menu>,
 }
 
 struct Session {
@@ -210,6 +213,7 @@ impl WriterApp {
             suggested: unfinished.map(|(_, rest)| rest).or_else(|| logbook::last_goal(&entries)),
             unfinished_from: unfinished.map(|(from, _)| from),
             record: logbook::record(&entries, today),
+            menu: None,
         };
         let screen = match begin(&pages, &logbook, &start.input) {
             Ok(Some(session)) => Screen::Writing(session),
@@ -300,11 +304,19 @@ impl WriterApp {
 
     fn start_screen(&mut self, ui: &egui::Ui, events: &[Event]) {
         let Screen::Start(start) = &mut self.screen else { return };
+        if let Some(open) = &mut start.menu {
+            if open.show(ui, events) == menu::Outcome::Closed {
+                start.menu = None;
+                ui.ctx().request_repaint();
+            }
+            return;
+        }
         let mut session = None;
         for event in events {
             match event {
                 Event::Text(text) => push_limited(&mut start.input, text, 12),
                 Event::Key { key, pressed: true, .. } => match key {
+                    Key::Tab => start.menu = Some(Menu::open(&self.pages)),
                     Key::Backspace => {
                         start.input.pop();
                     }
@@ -335,6 +347,12 @@ impl WriterApp {
         let font = FontId::monospace(TEXT_SIZE);
         let note = FontId::monospace(NOTE_SIZE);
         let (left, _) = column(painter, rect);
+
+        // The menu's word sits where its heading will be once it's open.
+        if menu::link(ui, pos2(left, rect.top() + 32.0), Align2::LEFT_TOP, "Menu", "start menu").clicked() {
+            start.menu = Some(Menu::open(&self.pages));
+            ui.ctx().request_repaint();
+        }
 
         let line = painter.layout_no_wrap(format!("Goal: {}", start.input), font.clone(), INK);
         let pos = pos2(left, rect.center().y - line.size().y / 2.0);
@@ -510,7 +528,7 @@ fn push_limited(line: &mut String, text: &str, max_chars: usize) {
 }
 
 /// The writing column: its left edge and width, centred on the page.
-fn column(painter: &Painter, rect: Rect) -> (f32, f32) {
+pub fn column(painter: &Painter, rect: Rect) -> (f32, f32) {
     let char_width = painter
         .layout_no_wrap("M".to_owned(), FontId::monospace(TEXT_SIZE), INK)
         .size()
@@ -538,7 +556,10 @@ impl eframe::App for WriterApp {
     /// Typing and drawing. Keystrokes are only read here: `logic` sees stale
     /// events while the window is hidden.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        ui.ctx().set_cursor_icon(CursorIcon::None);
+        // The pointer is for the start screen and its menu; writing has none.
+        if matches!(self.screen, Screen::Writing(_)) {
+            ui.ctx().set_cursor_icon(CursorIcon::None);
+        }
         ui.painter().rect_filled(ui.max_rect(), 0.0, PAPER);
         let events = ui.input(|i| i.events.clone());
         match self.screen {
@@ -578,6 +599,7 @@ impl eframe::App for WriterApp {
 mod tests {
     use super::*;
     use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
 
     const FIRST: &str = "The gallery opens at ten. Before that there is an hour where nothing happens, and that hour is the reason I keep coming back. The light moves across the floor in long pale bars, the radiators tick, and somewhere upstairs a door closes as if the whole building agreed with it.";
     const SECOND: &str = "Æblerne på bordet er ved at blive bløde. Jeg skriver dem ned alligevel, før de forsvinder.";
@@ -879,6 +901,137 @@ mod tests {
         let _ = std::fs::remove_dir_all(&pages2);
     }
 
+    /// A pages folder with two days and a saved copy.
+    fn written_before(name: &str) -> PathBuf {
+        let pages = scratch(name);
+        std::fs::create_dir_all(page::copies_dir(&pages)).unwrap();
+        std::fs::write(pages.join("2026-09-01.txt"), "An old page,\nfrom September.").unwrap();
+        std::fs::write(pages.join("2026-10-20.txt"), "A newer one.").unwrap();
+        std::fs::write(page::copies_dir(&pages).join("Short story.txt"), "Once upon a time").unwrap();
+        pages
+    }
+
+    fn menu<'a>(h: &'a Harness<'_, WriterApp>) -> Option<&'a Menu> {
+        match &h.state().screen {
+            Screen::Start(start) => start.menu.as_ref(),
+            Screen::Writing(_) => None,
+        }
+    }
+
+    #[test]
+    fn the_menu_lists_and_reads_earlier_pages() {
+        let pages = written_before("menu");
+        let mut h = start_screen(&pages);
+        h.event(Event::Text("50".to_owned()));
+        h.run_steps(2);
+
+        // Click "Menu" in the corner.
+        h.get_by_label("Menu").click();
+        h.run_steps(2);
+        let rows = menu(&h).expect("the menu is open").rows();
+        assert_eq!(rows.len(), 4);
+        assert!(rows[0].trim_start().starts_with("20 October 2026"), "newest first: {rows:?}");
+        assert!(rows[1].trim_start().starts_with("1 September 2026"));
+        assert_eq!(rows[2], "Short story");
+        assert_eq!(rows[3], format!("Open the {} folder", pages.file_name().unwrap().to_string_lossy()));
+
+        // Down, Enter: the older page, read-only.
+        h.key_press(Key::ArrowDown);
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        assert_eq!(menu(&h).unwrap().reading(), Some("An old page,\nfrom September."));
+        h.event(Event::Text("typing does nothing".to_owned()));
+        h.key_press(Key::Backspace);
+        h.run_steps(2);
+        assert_eq!(menu(&h).unwrap().reading(), Some("An old page,\nfrom September."));
+        assert_eq!(std::fs::read_to_string(pages.join("2026-09-01.txt")).unwrap(), "An old page,\nfrom September.");
+
+        // Esc back to the list, still on that line; Esc again to the start line.
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        assert_eq!(menu(&h).unwrap().reading(), None);
+        assert_eq!(menu(&h).unwrap().selected(), 1);
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        let Screen::Start(start) = &h.state().screen else { panic!("not the start screen") };
+        assert!(start.menu.is_none());
+        assert_eq!(start.input, "50", "the goal typed before is still there");
+
+        // Tab opens it too; clicking a line opens it.
+        h.key_press(Key::Tab);
+        h.run_steps(2);
+        h.get_by_label("Short story").click();
+        h.run_steps(2);
+        assert_eq!(menu(&h).unwrap().reading(), Some("Once upon a time"));
+        let _ = std::fs::remove_dir_all(&pages);
+    }
+
+    #[test]
+    fn a_named_copy_is_saved_and_listed() {
+        let pages = written_before("copy");
+        let mut h = start_screen(&pages);
+        let save = || Event::Key {
+            key: Key::S,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        h.key_press(Key::Tab);
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        h.event(save());
+        h.event(Event::Text("Short/story?".to_owned()));
+        h.run_steps(2);
+        assert_eq!(menu(&h).unwrap().naming().map(|n| n.0), Some("Shortstory"), "no / or ? in a file name");
+
+        // A name that's taken asks first; the second Enter replaces it.
+        for _ in 0.."Shortstory".len() {
+            h.key_press(Key::Backspace);
+        }
+        h.event(Event::Text("Short story".to_owned()));
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        let (_, problem) = menu(&h).unwrap().naming().expect("still naming");
+        assert!(problem.unwrap().contains("already a copy called Short story"));
+        let copy = page::copies_dir(&pages).join("Short story.txt");
+        assert_eq!(std::fs::read_to_string(&copy).unwrap(), "Once upon a time");
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        assert!(menu(&h).unwrap().naming().is_none(), "saved");
+        assert_eq!(std::fs::read_to_string(&copy).unwrap(), "A newer one.");
+
+        // A new name, through the link this time; back in the list, it's there.
+        h.get_by_label("Save a copy").click();
+        h.run_steps(2);
+        h.event(Event::Text("Draft".to_owned()));
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        assert_eq!(std::fs::read_to_string(page::copies_dir(&pages).join("Draft.txt")).unwrap(), "A newer one.");
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        let rows = menu(&h).unwrap().rows();
+        assert!(rows.contains(&"Draft".to_owned()) && rows.contains(&"Short story".to_owned()), "{rows:?}");
+        let _ = std::fs::remove_dir_all(&pages);
+    }
+
+    #[test]
+    fn the_folder_opens_from_the_menu() {
+        static OPENED: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+        let pages = written_before("folder");
+        let mut h = start_screen(&pages);
+        h.key_press(Key::Tab);
+        h.run_steps(2);
+        if let Screen::Start(Start { menu: Some(menu), .. }) = &mut h.state_mut().screen {
+            menu.open_folder = |dir| *OPENED.lock().unwrap() = Some(dir.to_owned());
+        }
+        h.key_press(Key::End);
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        assert_eq!(OPENED.lock().unwrap().as_deref(), Some(pages.as_path()));
+        let _ = std::fs::remove_dir_all(&pages);
+    }
+
     #[test]
     fn tally_counts_words_and_whole_minutes() {
         assert_eq!(tally(1, Duration::from_secs(59)), "1 word in under a minute");
@@ -974,6 +1127,37 @@ mod tests {
         // ...and after that, suggests the goal again.
         let mut harness = app(Settings::default());
         shot(&mut harness, "7-start-again");
+
+        // The menu, with a few older pages to list.
+        let today = Local::now().date_naive();
+        for (days_ago, text) in [(3, THIRD), (40, SECOND)] {
+            let day = today - chrono::Duration::days(days_ago);
+            std::fs::write(pages.join(format!("{}.txt", day.format("%Y-%m-%d"))), text).unwrap();
+        }
+        harness.key_press(Key::Tab);
+        shot(&mut harness, "8-menu");
+        harness.key_press(Key::Enter);
+        harness.event(Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: vec2(0.0, -2.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: Default::default(),
+        });
+        shot(&mut harness, "9-reading");
+        harness.event(Event::Key {
+            key: Key::S,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        });
+        harness.event(Event::Text("Short story".to_owned()));
+        shot(&mut harness, "10-save-copy");
+        harness.key_press(Key::Enter);
+        shot(&mut harness, "11-saved");
+        harness.key_press(Key::Escape);
+        shot(&mut harness, "12-menu-with-copy");
 
         let _ = std::fs::remove_dir_all(&pages);
     }

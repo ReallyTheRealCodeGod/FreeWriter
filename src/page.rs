@@ -1,6 +1,9 @@
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+use chrono::NaiveDate;
 
 /// The day's page: one plain text file per day in `Documents\Writing`.
 ///
@@ -96,24 +99,121 @@ impl Page {
         }
     }
 
-    /// Writes the page if anything changed. Writes to a temporary file first
-    /// and then swaps it in, so a crash mid-save can't leave half a page.
+    /// Writes the page if anything changed.
     pub fn save(&mut self) -> io::Result<()> {
         if !self.dirty {
             return Ok(());
         }
-        if let Some(dir) = self.path.parent() {
-            fs::create_dir_all(dir)?;
-        }
-        let tmp = self.path.with_extension("txt.tmp");
-        let mut file = File::create(&tmp)?;
-        file.write_all(self.text.as_bytes())?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&tmp, &self.path)?;
+        write_safely(&self.path, self.text.as_bytes())?;
         self.dirty = false;
         Ok(())
     }
+}
+
+/// Writes to a temporary file first and then swaps it in, so a crash
+/// mid-save can't leave half a file.
+fn write_safely(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("txt.tmp");
+    let mut file = File::create(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&tmp, path)
+}
+
+/// A page or a saved copy, as the menu lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Listed {
+    pub path: PathBuf,
+    pub title: Title,
+    pub words: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Title {
+    /// A day's page, `2026-10-22.txt`.
+    Day(NaiveDate),
+    /// A copy saved under a name, `Saved\Short story.txt`.
+    Copy(String),
+}
+
+/// Where saved copies go: a `Saved` folder next to the pages.
+pub fn copies_dir(pages: &Path) -> PathBuf {
+    pages.join("Saved")
+}
+
+/// The day pages, newest first. Other files in the folder are left out.
+pub fn day_pages(pages: &Path) -> Vec<Listed> {
+    let mut list: Vec<(NaiveDate, PathBuf)> = text_files(pages)
+        .filter_map(|(path, name)| Some((NaiveDate::parse_from_str(&name, "%Y-%m-%d").ok()?, path)))
+        .collect();
+    list.sort_by(|a, b| b.0.cmp(&a.0));
+    list.into_iter()
+        .map(|(date, path)| Listed { words: count_words(&read_text(&path)), path, title: Title::Day(date) })
+        .collect()
+}
+
+/// The saved copies, the most recently saved first.
+pub fn saved_copies(pages: &Path) -> Vec<Listed> {
+    let mut list: Vec<(SystemTime, Listed)> = text_files(&copies_dir(pages))
+        .map(|(path, name)| {
+            let saved = fs::metadata(&path).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
+            (saved, Listed { words: count_words(&read_text(&path)), path, title: Title::Copy(name) })
+        })
+        .collect();
+    list.sort_by(|a, b| b.0.cmp(&a.0));
+    list.into_iter().map(|(_, listed)| listed).collect()
+}
+
+/// The `.txt` files in a folder, with their names minus the extension.
+fn text_files(dir: &Path) -> impl Iterator<Item = (PathBuf, String)> {
+    fs::read_dir(dir).into_iter().flatten().flatten().filter_map(|entry| {
+        let path = entry.path();
+        let is_text = path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("txt"));
+        let name = path.file_stem()?.to_str()?.to_owned();
+        (is_text && path.is_file()).then_some((path, name))
+    })
+}
+
+/// A page's text for reading. A file that isn't valid UTF-8 (edited
+/// elsewhere, say) still shows, with odd characters marked.
+pub fn read_text(path: &Path) -> String {
+    let bytes = fs::read(path).unwrap_or_default();
+    String::from_utf8_lossy(&bytes).replace('\r', "")
+}
+
+/// Whether a character can be part of a file name on Windows.
+pub fn allowed_in_name(c: char) -> bool {
+    !c.is_control() && !r#"\/:*?"<>|"#.contains(c)
+}
+
+/// The file a copy called `name` is saved as, or what's wrong with the name.
+pub fn copy_path(pages: &Path, name: &str) -> Result<PathBuf, &'static str> {
+    // Windows drops spaces and dots from the end of a file name.
+    let name = name.trim().trim_end_matches(['.', ' ']);
+    if name.is_empty() {
+        return Err("Type a name for the copy.");
+    }
+    if !name.chars().all(allowed_in_name) {
+        return Err(r#"A name can't have \ / : * ? " < > or | in it."#);
+    }
+    let base = name.split('.').next().unwrap_or(name).trim_end().to_uppercase();
+    let reserved = ["CON", "PRN", "AUX", "NUL"].contains(&base.as_str())
+        || (base.len() == 4
+            && (base.starts_with("COM") || base.starts_with("LPT"))
+            && base.ends_with(|c: char| ('1'..='9').contains(&c)));
+    if reserved {
+        return Err("Windows keeps that name for itself. Try another.");
+    }
+    Ok(copies_dir(pages).join(format!("{name}.txt")))
+}
+
+/// Saves a copy of a page, byte for byte, written as safely as the pages.
+pub fn save_copy(from: &Path, to: &Path) -> io::Result<()> {
+    write_safely(to, &fs::read(from)?)
 }
 
 #[cfg(test)]
@@ -187,6 +287,55 @@ mod tests {
         let mut page = Page::open(scratch_dir("control").join("day.txt")).unwrap();
         page.type_text("a\tb\u{8}c");
         assert_eq!(page.tail(100), "abc");
+    }
+
+    #[test]
+    fn pages_are_listed_newest_first_and_copies_apart() {
+        let dir = scratch_dir("listing");
+        fs::create_dir_all(copies_dir(&dir)).unwrap();
+        fs::write(dir.join("2026-10-20.txt"), "Three words here").unwrap();
+        fs::write(dir.join("2026-10-22.txt"), "One").unwrap();
+        fs::write(dir.join("notes.txt"), "not a page").unwrap();
+        fs::write(dir.join("2026-10-21.txt.tmp"), "half a save").unwrap();
+        fs::write(copies_dir(&dir).join("Short story.txt"), "Once upon a time").unwrap();
+
+        let days = day_pages(&dir);
+        let dates: Vec<_> = days.iter().map(|l| l.title.clone()).collect();
+        let day = |d| Title::Day(NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap());
+        assert_eq!(dates, vec![day("2026-10-22"), day("2026-10-20")]);
+        assert_eq!((days[0].words, days[1].words), (1, 3));
+
+        let copies = saved_copies(&dir);
+        assert_eq!(copies.len(), 1);
+        assert_eq!((&copies[0].title, copies[0].words), (&Title::Copy("Short story".to_owned()), 4));
+        assert!(day_pages(&dir.join("missing")).is_empty());
+    }
+
+    #[test]
+    fn copy_names_follow_windows_rules() {
+        let dir = Path::new("pages");
+        assert_eq!(copy_path(dir, " Short story. "), Ok(dir.join("Saved").join("Short story.txt")));
+        assert_eq!(copy_path(dir, "Brev til Åse"), Ok(dir.join("Saved").join("Brev til Åse.txt")));
+        assert!(copy_path(dir, "   ").is_err());
+        assert!(copy_path(dir, "a/b").is_err());
+        for reserved in ["con", "NUL", "com1", "Lpt9.txt", "aux "] {
+            assert!(copy_path(dir, reserved).is_err(), "{reserved}");
+        }
+        assert!(copy_path(dir, "Console").is_ok());
+        assert!(copy_path(dir, "COM10").is_ok());
+        assert!(!allowed_in_name('?') && allowed_in_name('æ'));
+    }
+
+    #[test]
+    fn a_copy_is_the_page_byte_for_byte() {
+        let dir = scratch_dir("copy");
+        fs::create_dir_all(&dir).unwrap();
+        let page = dir.join("2026-10-22.txt");
+        fs::write(&page, "Æble\nline two").unwrap();
+        let copy = copy_path(&dir, "Æble").unwrap();
+        save_copy(&page, &copy).unwrap();
+        assert_eq!(fs::read(&copy).unwrap(), fs::read(&page).unwrap());
+        assert_eq!(read_text(&copy), "Æble\nline two");
     }
 
     #[test]

@@ -64,6 +64,19 @@ seconds, so even a forced exit loses at most a few seconds of writing.
 To keep the pages somewhere else, start it with `--pages`, e.g.
 `writer.exe --pages D:\Notes`.
 
+### The menu
+
+Before a session, click **Menu** in the top-left corner (or press Tab) to
+see everything you've written: your pages, newest first, and any saved
+copies, with their word counts. Click one (or use Up/Down and Enter) to read
+it on the page. It's read-only; scroll with the mouse wheel, the arrow keys
+or PageUp/PageDown.
+
+While reading, **Save a copy** (or Ctrl+S) saves the page under a name you
+type, as `Documents\Writing\Saved\<name>.txt`. Saved copies show up in the
+menu too. **Open the Writing folder** opens it in Explorer. Esc goes back a
+step; the menu is never there during a session.
+
 ## Your log
 
 Every session gets a line in `%APPDATA%\writer\log.tsv`: date, start time,

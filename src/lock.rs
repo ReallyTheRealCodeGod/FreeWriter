@@ -41,7 +41,19 @@ pub fn task_manager_in_front() -> bool {
     }
 }
 
-#[cfg(not(windows))]
+/// On a Mac, the way out is Activity Monitor or the Force Quit window
+/// (Cmd+Option+Esc), which belongs to loginwindow. The lock steps aside for
+/// either, the way it does for Task Manager on Windows.
+#[cfg(target_os = "macos")]
+pub fn task_manager_in_front() -> bool {
+    use objc2_app_kit::NSWorkspace;
+
+    let Some(front) = NSWorkspace::sharedWorkspace().frontmostApplication() else { return false };
+    let Some(id) = front.bundleIdentifier() else { return false };
+    matches!(id.to_string().as_str(), "com.apple.ActivityMonitor" | "com.apple.loginwindow")
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn task_manager_in_front() -> bool {
     false
 }

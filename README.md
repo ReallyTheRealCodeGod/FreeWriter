@@ -1,6 +1,6 @@
 # Writer
 
-A distraction-free writing app for Windows that works like an old typewriter.
+A distraction-free writing app for Windows and macOS that works like an old typewriter.
 Set a goal, and the page holds you until you reach it. Why it works the way it
 does is in [DESIGN.md](DESIGN.md).
 
@@ -31,6 +31,36 @@ To pin it, right-click Writer in the Start menu and choose *Pin to taskbar*.
 
 To remove it, uninstall Writer from Settings > Apps, or run `uninstall.ps1`.
 Your pages, log and settings are kept.
+
+## On a Mac
+
+Every push builds a ready-to-open Mac app on GitHub (Actions → *Mac app* →
+the `Writer-mac` download). Unzip it and drag **Writer** into Applications.
+It's signed only "ad hoc", not by a registered Apple developer, so the first
+time macOS may say it can't check it: open System Settings → Privacy &
+Security and click *Open Anyway*.
+
+To build it yourself (needs [Rust](https://rustup.rs) and the Xcode Command
+Line Tools):
+
+```sh
+sh macos/bundle.sh --install
+```
+
+That builds `target/release/Writer.app` and puts it in `~/Applications`, where
+Launchpad and Spotlight find it. Writing works the same as on Windows. The
+differences:
+
+- Your pages are in `~/Documents/Writing`. The first time, macOS asks whether
+  Writer may use your Documents folder; it needs that to save.
+- The log and settings are in `~/Library/Application Support/writer`.
+- The way out is Force Quit: **Cmd+Option+Esc**, choose Writer, *Force Quit*
+  (or hold **Cmd+Option+Shift+Esc** to force quit the app in front). The lock
+  steps aside for the Force Quit window and for Activity Monitor.
+- Cmd+Q is refused during a session, like closing the window. Before a
+  session, and once the goal is reached, it quits.
+- **Open the Writing folder** opens it in Finder.
+- Only one monitor is covered for now: other screens stay as they are.
 
 ## Writing
 
@@ -117,6 +147,9 @@ backspace = false   # a pure typewriter: Backspace doesn't erase
 - Win+L still locks the computer, and Ctrl+Alt+Del can't be blocked (on purpose).
 
 ## Development
+
+On a Mac, `cargo run --release` runs it straight from the source (without the
+app's icon).
 
 - `cargo run -- --windowed` runs in a normal window without the lock.
 - `writer.exe --goal 15s` locks for just 15 seconds: a quick way to try the

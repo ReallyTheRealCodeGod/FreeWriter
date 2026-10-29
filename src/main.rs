@@ -34,7 +34,18 @@ fn main() {
         let primary = lock::monitors().primary;
         viewport.with_fullscreen(true).with_decorations(false).with_monitor(primary)
     };
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    let mut options = eframe::NativeOptions { viewport, ..Default::default() };
+    // A Mac app gets a standard menu whose Quit (Cmd+Q) ends the app at once,
+    // past the lock. Without it, Cmd+Q reaches egui, which asks the window to
+    // close, and that the lock can refuse like any other close.
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        options.event_loop_builder = Some(Box::new(|builder| {
+            builder.with_default_menu(false);
+        }));
+    }
 
     let result = eframe::run_native(
         "Writer",
@@ -75,12 +86,12 @@ fn show_error(message: &str) {
     eprintln!("{message}");
 }
 
-/// Uses Courier New from the Windows fonts folder. If it isn't there, egui's
-/// built-in monospace font is used instead.
+/// Uses Courier New from the system's fonts (it ships with Windows and with
+/// macOS). If it isn't there, egui's built-in monospace font is used instead.
 fn load_typewriter_font(ctx: &egui::Context) {
-    let windows = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());
-    let path = std::path::Path::new(&windows).join("Fonts").join("cour.ttf");
-    let Ok(bytes) = std::fs::read(path) else { return };
+    let Some(bytes) = typewriter_font_files().into_iter().find_map(|path| std::fs::read(path).ok()) else {
+        return;
+    };
     ctx.add_font(egui::FontInsert::new(
         "Courier New",
         egui::FontData::from_owned(bytes),
@@ -89,4 +100,17 @@ fn load_typewriter_font(ctx: &egui::Context) {
             priority: egui::FontPriority::Highest,
         }],
     ));
+}
+
+/// Where Courier New is, first place first.
+fn typewriter_font_files() -> Vec<std::path::PathBuf> {
+    if cfg!(target_os = "macos") {
+        vec![
+            "/System/Library/Fonts/Supplemental/Courier New.ttf".into(),
+            "/Library/Fonts/Courier New.ttf".into(),
+        ]
+    } else {
+        let windows = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());
+        vec![std::path::Path::new(&windows).join("Fonts").join("cour.ttf")]
+    }
 }

@@ -3,6 +3,7 @@ use std::sync::{Arc, OnceLock};
 use eframe::egui::IconData;
 
 /// The app's icon file; build.rs also puts it in writer.exe for Explorer.
+/// On a Mac the app's icon comes from `assets/writer.icns` in the app bundle.
 const ICO: &[u8] = include_bytes!("../assets/writer.ico");
 
 /// The icon for the windows (title bar, taskbar, Alt+Tab): the largest image

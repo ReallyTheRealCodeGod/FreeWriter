@@ -19,7 +19,7 @@ pub struct Menu {
     selected: usize,
     scroll: f32,
     reading: Option<Reading>,
-    /// Opens a folder in Explorer. A field so tests can stand in for it.
+    /// Opens a folder in Explorer or Finder. A field so tests can stand in for it.
     pub open_folder: fn(&Path),
 }
 
@@ -61,7 +61,7 @@ impl Menu {
             selected: 0,
             scroll: 0.0,
             reading: None,
-            open_folder: open_in_explorer,
+            open_folder: open_in_file_manager,
         }
     }
 
@@ -418,9 +418,17 @@ pub fn link(ui: &egui::Ui, pos: Pos2, anchor: Align2, text: &str, id: &str) -> e
     response
 }
 
-fn open_in_explorer(dir: &Path) {
+/// Opens a folder in Explorer on Windows, Finder on a Mac.
+fn open_in_file_manager(dir: &Path) {
     let _ = std::fs::create_dir_all(dir);
-    let _ = std::process::Command::new("explorer").arg(dir).spawn();
+    let program = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(program).arg(dir).spawn();
 }
 
 #[cfg(test)]

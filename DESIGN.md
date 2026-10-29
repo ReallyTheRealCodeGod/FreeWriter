@@ -1,12 +1,13 @@
 # Writer — design
 
-A distraction-free writing app for Windows that works like an old typewriter:
+A distraction-free writing app for Windows (and macOS, see [macOS](#macos))
+that works like an old typewriter:
 set a goal, and you're locked onto a blank page until you reach it.
 
 ## Stack
 
 Rust, with egui/eframe for the window (version pinned in `Cargo.toml`).
-Windows only. Rust toolchain: the GNU host (`x86_64-pc-windows-gnu`), which
+Windows first, and it builds for macOS too (see [macOS](#macos)). Rust toolchain on Windows: the GNU host (`x86_64-pc-windows-gnu`), which
 needs no admin rights and no Visual Studio.
 
 The icon and version details (the name "Writer" in Explorer and Task
@@ -18,6 +19,29 @@ time.
 `install.ps1` installs it per user, without admin rights: the exe in
 `%LOCALAPPDATA%\Programs\Writer`, a Start menu shortcut, and an entry under
 Settings > Apps that runs `uninstall.ps1`.
+
+## macOS
+
+The same app builds for macOS. Platform differences are kept small:
+
+- **App bundle:** `macos/bundle.sh` builds `Writer.app` (the binary,
+  `assets/writer.icns`, and `macos/Info.plist` with the version from
+  `Cargo.toml`), signed ad hoc, which Apple silicon requires. A GitHub
+  Actions workflow (`.github/workflows/macos.yml`) builds and uploads it on
+  every push, so a Mac without Rust can still get the app.
+- **No standard menu.** winit's default menu has a Quit item that ends the
+  app at once, past the lock. Without it, Cmd+Q reaches egui as a close
+  request, which the lock refuses like Alt+F4.
+- **The way out** is the Force Quit window (Cmd+Option+Esc, which belongs to
+  `loginwindow`) and Activity Monitor; the lock steps aside for either, as it
+  does for Task Manager. Cmd+Option+Shift+Esc force quits the app in front
+  and can't be blocked.
+- Courier New ships with macOS too (`/System/Library/Fonts/Supplemental`).
+- Pages in `~/Documents/Writing`; app files in
+  `~/Library/Application Support/writer`. `Info.plist` explains the
+  Documents prompt macOS shows the first time.
+- Covers for other monitors are Windows only for now: the monitor list on a
+  Mac reports one monitor, so there are no covers (fails open).
 
 ## Flow
 

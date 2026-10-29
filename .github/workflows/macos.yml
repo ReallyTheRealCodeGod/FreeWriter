@@ -1,0 +1,21 @@
+name: Mac app
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: rustup update stable && rustup default stable
+      - name: Build Writer.app
+        run: sh macos/bundle.sh
+      - name: Zip it
+        run: ditto -c -k --keepParent target/release/Writer.app Writer-mac.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Writer-mac
+          path: Writer-mac.zip

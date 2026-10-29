@@ -4239,7 +4239,9 @@ dependencies = [
  "eframe",
  "egui_kittest",
  "image",
+ "objc2-app-kit 0.3.2",
  "windows-sys 0.61.2",
+ "winit",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{Datelike, NaiveDate, NaiveTime};
 
@@ -124,14 +124,15 @@ impl Logbook {
         file.write_all(format!("{header}{}\n", entry.line()).as_bytes())
     }
 
-    /// Records the running session as it stands. Written to a temporary file
-    /// and swapped in, like the page.
-    pub fn write_running(&self, entry: &Entry) -> io::Result<()> {
+    /// Records the running session as it stands, and the page it's on, on a
+    /// line of its own. Written to a temporary file and swapped in, like the
+    /// page.
+    pub fn write_running(&self, entry: &Entry, page: &Path) -> io::Result<()> {
         fs::create_dir_all(&self.dir)?;
         let path = self.running_path();
         let tmp = path.with_extension("tsv.tmp");
         let mut file = File::create(&tmp)?;
-        file.write_all(format!("{}\n", entry.line()).as_bytes())?;
+        file.write_all(format!("{}\n{}\n", entry.line(), page.display()).as_bytes())?;
         file.sync_all()?;
         drop(file);
         fs::rename(tmp, path)
@@ -146,16 +147,19 @@ impl Logbook {
         }
     }
 
-    /// A session that didn't end properly, if there was one. It's moved into
-    /// the log as it stood at its last save.
-    pub fn recover(&self) -> Option<Entry> {
+    /// A session that didn't end properly, if there was one, and the page it
+    /// was on. It's moved into the log as it stood at its last save.
+    pub fn recover(&self) -> Option<(Entry, Option<PathBuf>)> {
         let text = fs::read_to_string(self.running_path()).ok()?;
-        let entry = Entry::parse(text.lines().next()?);
+        let mut lines = text.lines();
+        let entry = Entry::parse(lines.next()?);
         match &entry {
             Some(entry) => self.finish(entry).ok()?,
             None => fs::remove_file(self.running_path()).ok()?,
         }
-        entry
+        // Older versions didn't write the page down.
+        let page = lines.next().map(str::trim).filter(|line| !line.is_empty()).map(PathBuf::from);
+        Some((entry?, page))
     }
 }
 
@@ -252,18 +256,24 @@ mod tests {
     #[test]
     fn a_running_session_ends_in_the_log_either_way() {
         let log = scratch("running");
+        let page = Path::new(r"C:\Users\peter\Documents\Writing\Short story.txt");
         let first = entry("2026-10-21", Goal::Words(500), 523, 27, Outcome::Reached);
-        log.write_running(&first).unwrap();
+        log.write_running(&first, page).unwrap();
         log.finish(&first).unwrap();
         assert!(log.recover().is_none(), "a finished session leaves nothing behind");
 
         // Killed mid-session: the next start finds it and logs it.
         let second = entry("2026-10-22", Goal::Words(500), 312, 9, Outcome::Unfinished);
-        log.write_running(&second).unwrap();
-        assert_eq!(log.recover(), Some(second.clone()));
+        log.write_running(&second, page).unwrap();
+        assert_eq!(log.recover(), Some((second.clone(), Some(page.to_owned()))));
         assert!(log.recover().is_none());
 
-        assert_eq!(log.entries(), vec![first, second]);
+        // From before the page was written down.
+        let third = entry("2026-10-23", Goal::Words(500), 100, 4, Outcome::Unfinished);
+        fs::write(log.running_path(), format!("{}\n", third.line())).unwrap();
+        assert_eq!(log.recover(), Some((third.clone(), None)));
+
+        assert_eq!(log.entries(), vec![first, second, third]);
         let text = fs::read_to_string(log.path()).unwrap();
         assert!(text.starts_with(HEADER), "the log has a header for spreadsheets");
         let _ = fs::remove_dir_all(&log.dir);

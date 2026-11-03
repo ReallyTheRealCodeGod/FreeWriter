@@ -3,9 +3,10 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use chrono::NaiveDate;
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime};
 
-/// The day's page: one plain text file per day in `Documents\Writing`.
+/// A page: one plain text file in `Documents\Writing`, new and blank or
+/// written on before.
 ///
 /// Text is only ever added at the end. Backspace can take back what was typed
 /// in this session, but never touches what was already on the page.
@@ -25,10 +26,33 @@ pub fn pages_dir() -> PathBuf {
         .join("Writing")
 }
 
-/// Today's page in that folder, e.g. `2026-10-21.txt`.
-pub fn today_file(pages: &Path) -> PathBuf {
-    let date = chrono::Local::now().format("%Y-%m-%d");
-    pages.join(format!("{date}.txt"))
+/// Where an earlier version saved named copies. They're listed with the
+/// pages; new names go in the pages folder itself.
+const OLD_COPIES: &str = "Saved";
+
+/// The file for a new page until it's named: the time it was begun, e.g.
+/// `2026-11-03 14.05.txt`, with a number after it if that's taken.
+pub fn new_file(pages: &Path, now: DateTime<Local>) -> PathBuf {
+    let stem = now.format("%Y-%m-%d %H.%M").to_string();
+    let mut path = pages.join(format!("{stem}.txt"));
+    let mut n = 2;
+    while path.exists() {
+        path = pages.join(format!("{stem} {n}.txt"));
+        n += 1;
+    }
+    path
+}
+
+/// Whether a page has only a date for a name: a new page not named yet, or a
+/// day's page from before pages had names.
+pub fn is_unnamed(path: &Path) -> bool {
+    let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else { return false };
+    // "2026-11-03 14.05 2", the second new page begun that minute.
+    let stem = match stem.rsplit_once(' ') {
+        Some((rest, n)) if n.parse::<u32>().is_ok() => rest,
+        _ => stem,
+    };
+    NaiveDateTime::parse_from_str(stem, "%Y-%m-%d %H.%M").is_ok() || NaiveDate::parse_from_str(stem, "%Y-%m-%d").is_ok()
 }
 
 pub fn count_words(text: &str) -> usize {
@@ -54,8 +78,17 @@ impl Page {
         Ok(Self { path, text, session_start, dirty: false })
     }
 
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.dirty
+    }
+
+    /// Whether there's nothing on the page at all, from before or now.
+    pub fn is_blank(&self) -> bool {
+        self.text.trim().is_empty()
     }
 
     pub fn type_text(&mut self, typed: &str) {
@@ -82,7 +115,7 @@ impl Page {
     }
 
     /// The end of the text, enough to fill the screen above the typing line
-    /// without laying out the whole day on every keystroke. Starts at a line
+    /// without laying out the whole page on every keystroke. Starts at a line
     /// break where possible so wrapping doesn't shift as you type.
     pub fn tail(&self, max_bytes: usize) -> &str {
         let text = &self.text;
@@ -108,6 +141,23 @@ impl Page {
         self.dirty = false;
         Ok(())
     }
+
+    /// Gives the page a new file name: the file moves to `to`, and it's saved
+    /// there from now on. Never replaces a file that's already there.
+    pub fn rename(&mut self, to: PathBuf) -> io::Result<()> {
+        if to.exists() {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "there's a page by that name already"));
+        }
+        match fs::rename(&self.path, &to) {
+            Ok(()) => {}
+            // Nothing saved yet. Named, it's saved even if it's empty, so it
+            // shows up in the menu.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => self.dirty = true,
+            Err(e) => return Err(e),
+        }
+        self.path = to;
+        self.save()
+    }
 }
 
 /// Writes to a temporary file first and then swaps it in, so a crash
@@ -124,57 +174,40 @@ fn write_safely(path: &Path, bytes: &[u8]) -> io::Result<()> {
     fs::rename(&tmp, path)
 }
 
-/// A page or a saved copy, as the menu lists it.
+/// A page as the menu lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Listed {
     pub path: PathBuf,
-    pub title: Title,
+    /// The file's name without `.txt`.
+    pub name: String,
+    /// When it was last written to.
+    pub written: DateTime<Local>,
     pub words: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Title {
-    /// A day's page, `2026-10-22.txt`.
-    Day(NaiveDate),
-    /// A copy saved under a name, `Saved\Short story.txt`.
-    Copy(String),
+impl Listed {
+    pub fn of(path: PathBuf) -> Self {
+        let name = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+        let written = fs::metadata(&path).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
+        Self { words: count_words(&read_text(&path)), written: written.into(), name, path }
+    }
 }
 
-/// Where saved copies go: a `Saved` folder next to the pages.
-pub fn copies_dir(pages: &Path) -> PathBuf {
-    pages.join("Saved")
-}
-
-/// The day pages, newest first. Other files in the folder are left out.
-pub fn day_pages(pages: &Path) -> Vec<Listed> {
-    let mut list: Vec<(NaiveDate, PathBuf)> = text_files(pages)
-        .filter_map(|(path, name)| Some((NaiveDate::parse_from_str(&name, "%Y-%m-%d").ok()?, path)))
+/// Every page, the one written to last first. Other files are left out.
+pub fn all_pages(pages: &Path) -> Vec<Listed> {
+    let mut list: Vec<Listed> = text_files(pages)
+        .chain(text_files(&pages.join(OLD_COPIES)))
+        .map(Listed::of)
         .collect();
-    list.sort_by(|a, b| b.0.cmp(&a.0));
-    list.into_iter()
-        .map(|(date, path)| Listed { words: count_words(&read_text(&path)), path, title: Title::Day(date) })
-        .collect()
+    list.sort_by(|a, b| b.written.cmp(&a.written).then_with(|| a.name.cmp(&b.name)));
+    list
 }
 
-/// The saved copies, the most recently saved first.
-pub fn saved_copies(pages: &Path) -> Vec<Listed> {
-    let mut list: Vec<(SystemTime, Listed)> = text_files(&copies_dir(pages))
-        .map(|(path, name)| {
-            let saved = fs::metadata(&path).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
-            (saved, Listed { words: count_words(&read_text(&path)), path, title: Title::Copy(name) })
-        })
-        .collect();
-    list.sort_by(|a, b| b.0.cmp(&a.0));
-    list.into_iter().map(|(_, listed)| listed).collect()
-}
-
-/// The `.txt` files in a folder, with their names minus the extension.
-fn text_files(dir: &Path) -> impl Iterator<Item = (PathBuf, String)> {
-    fs::read_dir(dir).into_iter().flatten().flatten().filter_map(|entry| {
-        let path = entry.path();
+/// The `.txt` files in a folder.
+fn text_files(dir: &Path) -> impl Iterator<Item = PathBuf> {
+    fs::read_dir(dir).into_iter().flatten().flatten().map(|entry| entry.path()).filter(|path| {
         let is_text = path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("txt"));
-        let name = path.file_stem()?.to_str()?.to_owned();
-        (is_text && path.is_file()).then_some((path, name))
+        is_text && path.is_file()
     })
 }
 
@@ -190,12 +223,12 @@ pub fn allowed_in_name(c: char) -> bool {
     !c.is_control() && !r#"\/:*?"<>|"#.contains(c)
 }
 
-/// The file a copy called `name` is saved as, or what's wrong with the name.
-pub fn copy_path(pages: &Path, name: &str) -> Result<PathBuf, &'static str> {
+/// The file a page called `name` is saved as, or what's wrong with the name.
+pub fn named_file(pages: &Path, name: &str) -> Result<PathBuf, &'static str> {
     // Windows drops spaces and dots from the end of a file name.
     let name = name.trim().trim_end_matches(['.', ' ']);
     if name.is_empty() {
-        return Err("Type a name for the copy.");
+        return Err("Type a name for the page.");
     }
     if !name.chars().all(allowed_in_name) {
         return Err(r#"A name can't have \ / : * ? " < > or | in it."#);
@@ -208,17 +241,13 @@ pub fn copy_path(pages: &Path, name: &str) -> Result<PathBuf, &'static str> {
     if reserved {
         return Err("Windows keeps that name for itself. Try another.");
     }
-    Ok(copies_dir(pages).join(format!("{name}.txt")))
-}
-
-/// Saves a copy of a page, byte for byte, written as safely as the pages.
-pub fn save_copy(from: &Path, to: &Path) -> io::Result<()> {
-    write_safely(to, &fs::read(from)?)
+    Ok(pages.join(format!("{name}.txt")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     fn scratch_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("writer-test-{}-{name}", std::process::id()));
@@ -290,52 +319,81 @@ mod tests {
     }
 
     #[test]
-    fn pages_are_listed_newest_first_and_copies_apart() {
-        let dir = scratch_dir("listing");
-        fs::create_dir_all(copies_dir(&dir)).unwrap();
-        fs::write(dir.join("2026-10-20.txt"), "Three words here").unwrap();
-        fs::write(dir.join("2026-10-22.txt"), "One").unwrap();
-        fs::write(dir.join("notes.txt"), "not a page").unwrap();
-        fs::write(dir.join("2026-10-21.txt.tmp"), "half a save").unwrap();
-        fs::write(copies_dir(&dir).join("Short story.txt"), "Once upon a time").unwrap();
-
-        let days = day_pages(&dir);
-        let dates: Vec<_> = days.iter().map(|l| l.title.clone()).collect();
-        let day = |d| Title::Day(NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap());
-        assert_eq!(dates, vec![day("2026-10-22"), day("2026-10-20")]);
-        assert_eq!((days[0].words, days[1].words), (1, 3));
-
-        let copies = saved_copies(&dir);
-        assert_eq!(copies.len(), 1);
-        assert_eq!((&copies[0].title, copies[0].words), (&Title::Copy("Short story".to_owned()), 4));
-        assert!(day_pages(&dir.join("missing")).is_empty());
-    }
-
-    #[test]
-    fn copy_names_follow_windows_rules() {
-        let dir = Path::new("pages");
-        assert_eq!(copy_path(dir, " Short story. "), Ok(dir.join("Saved").join("Short story.txt")));
-        assert_eq!(copy_path(dir, "Brev til Åse"), Ok(dir.join("Saved").join("Brev til Åse.txt")));
-        assert!(copy_path(dir, "   ").is_err());
-        assert!(copy_path(dir, "a/b").is_err());
-        for reserved in ["con", "NUL", "com1", "Lpt9.txt", "aux "] {
-            assert!(copy_path(dir, reserved).is_err(), "{reserved}");
-        }
-        assert!(copy_path(dir, "Console").is_ok());
-        assert!(copy_path(dir, "COM10").is_ok());
-        assert!(!allowed_in_name('?') && allowed_in_name('æ'));
-    }
-
-    #[test]
-    fn a_copy_is_the_page_byte_for_byte() {
-        let dir = scratch_dir("copy");
+    fn new_pages_are_named_by_the_minute_they_begin() {
+        let dir = scratch_dir("newfile");
         fs::create_dir_all(&dir).unwrap();
-        let page = dir.join("2026-10-22.txt");
-        fs::write(&page, "Æble\nline two").unwrap();
-        let copy = copy_path(&dir, "Æble").unwrap();
-        save_copy(&page, &copy).unwrap();
-        assert_eq!(fs::read(&copy).unwrap(), fs::read(&page).unwrap());
-        assert_eq!(read_text(&copy), "Æble\nline two");
+        let now = Local.with_ymd_and_hms(2026, 11, 3, 14, 5, 59).unwrap();
+        let first = new_file(&dir, now);
+        assert_eq!(first, dir.join("2026-11-03 14.05.txt"));
+        assert_eq!(new_file(&dir, now), first, "nothing saved there yet");
+        fs::write(&first, "taken").unwrap();
+        assert_eq!(new_file(&dir, now), dir.join("2026-11-03 14.05 2.txt"));
+
+        for unnamed in ["2026-11-03 14.05.txt", "2026-11-03 14.05 2.txt", "2026-10-29.txt"] {
+            assert!(is_unnamed(Path::new(unnamed)), "{unnamed}");
+        }
+        for named in ["Short story.txt", "Brev 2.txt", "2026.txt", "Den 3. november 14.05.txt"] {
+            assert!(!is_unnamed(Path::new(named)), "{named}");
+        }
+    }
+
+    #[test]
+    fn naming_moves_the_page_and_never_replaces_another() {
+        let dir = scratch_dir("rename");
+        fs::create_dir_all(&dir).unwrap();
+        let mut page = Page::open(dir.join("2026-11-03 14.05.txt")).unwrap();
+        page.type_text("Once");
+        page.save().unwrap();
+        page.type_text(" upon");
+        page.rename(dir.join("Short story.txt")).unwrap();
+        assert!(!dir.join("2026-11-03 14.05.txt").exists(), "moved, not copied");
+        assert_eq!(fs::read_to_string(dir.join("Short story.txt")).unwrap(), "Once upon");
+
+        fs::write(dir.join("Taken.txt"), "Someone else's").unwrap();
+        assert!(page.rename(dir.join("Taken.txt")).is_err());
+        assert_eq!(fs::read_to_string(dir.join("Taken.txt")).unwrap(), "Someone else's");
+        assert_eq!(page.path(), dir.join("Short story.txt"));
+
+        // Named before anything was typed: it's saved, empty, under the name.
+        let mut blank = Page::open(dir.join("2026-11-03 15.00.txt")).unwrap();
+        blank.rename(dir.join("Later.txt")).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("Later.txt")).unwrap(), "");
+    }
+
+    #[test]
+    fn pages_are_listed_last_written_first() {
+        let dir = scratch_dir("listing");
+        fs::create_dir_all(dir.join(OLD_COPIES)).unwrap();
+        let write = |path: PathBuf, text: &str, days_ago: u64| {
+            fs::write(&path, text).unwrap();
+            let when = SystemTime::now() - std::time::Duration::from_secs(days_ago * 86_400);
+            File::options().write(true).open(&path).unwrap().set_modified(when).unwrap();
+        };
+        write(dir.join("2026-10-20.txt"), "Three words here", 9);
+        write(dir.join("Short story.txt"), "One", 0);
+        write(dir.join(OLD_COPIES).join("Old copy.txt"), "Once upon a time", 3);
+        fs::write(dir.join("2026-10-21.txt.tmp"), "half a save").unwrap();
+        fs::write(dir.join("notes.md"), "not a page").unwrap();
+
+        let list = all_pages(&dir);
+        let names: Vec<(&str, usize)> = list.iter().map(|l| (l.name.as_str(), l.words)).collect();
+        assert_eq!(names, vec![("Short story", 1), ("Old copy", 4), ("2026-10-20", 3)]);
+        assert!(all_pages(&dir.join("missing")).is_empty());
+    }
+
+    #[test]
+    fn names_follow_windows_rules() {
+        let dir = Path::new("pages");
+        assert_eq!(named_file(dir, " Short story. "), Ok(dir.join("Short story.txt")));
+        assert_eq!(named_file(dir, "Brev til Åse"), Ok(dir.join("Brev til Åse.txt")));
+        assert!(named_file(dir, "   ").is_err());
+        assert!(named_file(dir, "a/b").is_err());
+        for reserved in ["con", "NUL", "com1", "Lpt9.txt", "aux "] {
+            assert!(named_file(dir, reserved).is_err(), "{reserved}");
+        }
+        assert!(named_file(dir, "Console").is_ok());
+        assert!(named_file(dir, "COM10").is_ok());
+        assert!(!allowed_in_name('?') && allowed_in_name('æ'));
     }
 
     #[test]

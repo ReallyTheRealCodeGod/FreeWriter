@@ -13,7 +13,7 @@ use crate::icon;
 use crate::lock::{self, Monitors};
 use crate::logbook::{self, Entry, Logbook, Outcome};
 use crate::menu::{self, Menu};
-use crate::page::{self, Page};
+use crate::page::{self, Listed, Page};
 use crate::settings::Settings;
 use crate::terminal::{self, Terminal};
 
@@ -41,11 +41,16 @@ const LOCK_TICK: Duration = Duration::from_millis(250);
 /// Typing this exactly ends a session early, if `panic_exit` is on.
 const PANIC_SENTENCE: &str = "I choose to stop writing now, before I have reached my goal.";
 
+/// How long a page's name can be, in characters.
+const NAME_CHARS: usize = 60;
+/// How long "Saved as ..." stays at the bottom.
+const NOTE_FOR: Duration = Duration::from_secs(4);
+
 pub struct WriterApp {
     settings: Settings,
     /// Development mode: a normal window and no lock.
     windowed: bool,
-    /// The folder the day's pages go in.
+    /// The folder the pages go in.
     pages: PathBuf,
     /// Where sessions are logged; `None` if there's no app folder.
     logbook: Option<Logbook>,
@@ -81,6 +86,20 @@ struct Start {
     record: Option<String>,
     /// The menu, while it's open over the start line.
     menu: Option<Menu>,
+    /// The page chosen to write on; `None` for a new one.
+    page: Option<Listed>,
+}
+
+impl Start {
+    /// Chooses the page for the next session. The rest of an unfinished
+    /// session belongs on its own page, so choosing another lets it go.
+    fn choose(&mut self, page: Option<Listed>, logbook: &Option<Logbook>) {
+        let path = |page: &Option<Listed>| page.as_ref().map(|page| page.path.clone());
+        if path(&page) != path(&self.page) && self.unfinished_from.take().is_some() {
+            self.suggested = logbook.as_ref().and_then(|log| logbook::last_goal(&log.entries()));
+        }
+        self.page = page;
+    }
 }
 
 struct Session {
@@ -107,6 +126,19 @@ struct Session {
     hidden_since: Option<Instant>,
     /// Time spent behind the terminal before that.
     hidden_for: Duration,
+    /// The name being typed, after Ctrl+S on a page without one.
+    naming: Option<Naming>,
+    /// What was just saved, and since when it's been showing.
+    note: Option<(String, Instant)>,
+}
+
+/// The line for giving a page its name.
+#[derive(Default)]
+struct Naming {
+    name: String,
+    /// Brought up by Esc on the way out: Esc again leaves without a name.
+    leaving: bool,
+    problem: Option<String>,
 }
 
 impl Session {
@@ -127,6 +159,8 @@ impl Session {
             logged: false,
             hidden_since: None,
             hidden_for: Duration::ZERO,
+            naming: None,
+            note: None,
         }
     }
 
@@ -205,7 +239,7 @@ impl Session {
     fn save(&mut self) -> bool {
         self.last_save = Instant::now();
         if let (Some(logbook), false) = (&self.logbook, self.logged) {
-            let _ = logbook.write_running(&self.entry());
+            let _ = logbook.write_running(&self.entry(), self.page.path());
         }
         match self.page.save() {
             Ok(()) => {
@@ -217,6 +251,31 @@ impl Session {
                 false
             }
         }
+    }
+
+    /// Gives the page the name being typed, unless the name won't do. True
+    /// once it's named and saved.
+    fn name(&mut self, pages: &Path) -> bool {
+        let Some(naming) = &mut self.naming else { return false };
+        let to = match page::named_file(pages, &naming.name) {
+            Ok(to) => to,
+            Err(problem) => {
+                naming.problem = Some(problem.to_owned());
+                return false;
+            }
+        };
+        if to.exists() {
+            naming.problem = Some(format!("There's already a page called {}. Try another name.", stem(&to)));
+            return false;
+        }
+        if let Err(e) = self.page.rename(to.clone()) {
+            naming.problem = Some(format!("Couldn't save it: {e}"));
+            return false;
+        }
+        self.naming = None;
+        self.note = Some((format!("Saved as {}", short_path(&to)), Instant::now()));
+        // The running line follows the page to its name.
+        self.save()
     }
 }
 
@@ -230,22 +289,25 @@ impl WriterApp {
         goal: Option<String>,
     ) -> Self {
         // A session that didn't end properly goes into the log first, and if
-        // it was today and short of its goal, the rest of it is offered.
+        // it was today and short of its goal, the rest of it is offered, on
+        // the page it was on.
         let leftover = logbook.as_ref().and_then(Logbook::recover);
         let entries = logbook.as_ref().map(Logbook::entries).unwrap_or_default();
         let today = Local::now().date_naive();
         let unfinished = leftover
-            .filter(|entry| entry.outcome == Outcome::Unfinished && entry.date == today)
-            .and_then(|entry| Some((entry.start, entry.remaining()?)));
+            .filter(|(entry, _)| entry.outcome == Outcome::Unfinished && entry.date == today)
+            .and_then(|(entry, page)| Some((entry.start, entry.remaining()?, page)));
         let mut start = Start {
             input: goal.unwrap_or_default(),
             error: None,
-            suggested: unfinished.map(|(_, rest)| rest).or_else(|| logbook::last_goal(&entries)),
-            unfinished_from: unfinished.map(|(from, _)| from),
+            suggested: unfinished.as_ref().map(|(_, rest, _)| *rest).or_else(|| logbook::last_goal(&entries)),
+            unfinished_from: unfinished.as_ref().map(|(from, _, _)| *from),
             record: logbook::record(&entries, today),
             menu: None,
+            // A page that never got a word isn't there; that goes on a new one.
+            page: unfinished.and_then(|(_, _, page)| page).filter(|page| page.is_file()).map(Listed::of),
         };
-        let screen = match begin(&pages, &logbook, &start.input) {
+        let screen = match begin(&pages, &logbook, &start.input, None) {
             Ok(Some(session)) => Screen::Writing(session),
             Ok(None) => Screen::Start(start),
             Err(error) => {
@@ -349,9 +411,17 @@ impl WriterApp {
     fn start_screen(&mut self, ui: &egui::Ui, events: &[Event]) {
         let Screen::Start(start) = &mut self.screen else { return };
         if let Some(open) = &mut start.menu {
-            if open.show(ui, events) == menu::Outcome::Closed {
-                start.menu = None;
-                ui.ctx().request_repaint();
+            match open.show(ui, events) {
+                menu::Outcome::Open => {}
+                menu::Outcome::Closed => {
+                    start.menu = None;
+                    ui.ctx().request_repaint();
+                }
+                menu::Outcome::WriteOn(page) => {
+                    start.menu = None;
+                    start.choose(Some(page), &self.logbook);
+                    ui.ctx().request_repaint();
+                }
             }
             return;
         }
@@ -369,11 +439,14 @@ impl WriterApp {
                             (true, Some(goal)) => goal.input(),
                             _ => start.input.clone(),
                         };
-                        match begin(&self.pages, &self.logbook, &input) {
+                        let page = start.page.as_ref().map(|page| page.path.as_path());
+                        match begin(&self.pages, &self.logbook, &input, page) {
                             Ok(started) => session = started,
                             Err(e) => start.error = Some(e),
                         }
                     }
+                    // A step back: from a chosen page to a new one, then out.
+                    Key::Escape if start.page.is_some() => start.choose(None, &self.logbook),
                     Key::Escape => ui.ctx().send_viewport_cmd(ViewportCommand::Close),
                     _ => {}
                 },
@@ -397,6 +470,14 @@ impl WriterApp {
             start.menu = Some(Menu::open(&self.pages));
             ui.ctx().request_repaint();
         }
+        // With a page chosen, a way back to a blank one beside it.
+        if start.page.is_some() {
+            let x = left + painter.layout_no_wrap("Menu   ".to_owned(), note.clone(), FAINT).size().x;
+            if menu::link(ui, pos2(x, rect.top() + 32.0), Align2::LEFT_TOP, "New page", "start new page").clicked() {
+                start.choose(None, &self.logbook);
+                ui.ctx().request_repaint();
+            }
+        }
 
         let line = painter.layout_no_wrap(format!("Goal: {}", start.input), font.clone(), INK);
         let pos = pos2(left, rect.center().y - line.size().y / 2.0);
@@ -416,6 +497,7 @@ impl WriterApp {
             (Ok(None), Some(goal), None) => {
                 format!("{}, like last time. Enter to start, or type another goal.", goal.describe())
             }
+            (Ok(None), None, _) if start.page.is_some() => "500 for words, 25m for minutes.".to_owned(),
             (Ok(None), None, _) => "500 for words, 25m for minutes. Esc to quit.".to_owned(),
             (Ok(Some(goal)), ..) => goal.describe(),
             (Err(problem), ..) => problem.to_owned(),
@@ -429,17 +511,42 @@ impl WriterApp {
         if let Some(record) = &start.record {
             painter.text(bottom - vec2(0.0, 24.0), Align2::CENTER_BOTTOM, record, note.clone(), FAINT);
         }
-        let where_ = format!("Today's page: {}", page::today_file(&self.pages).display());
-        painter.text(bottom, Align2::CENTER_BOTTOM, where_, note, FAINT);
+        let on = match &start.page {
+            Some(page) => format!("Writing on {} ({}). Esc for a new page.", page.name, menu::words(page.words)),
+            None => "A new page. Once you reach your goal, Ctrl+S gives it a name.".to_owned(),
+        };
+        painter.text(bottom, Align2::CENTER_BOTTOM, on, note, FAINT);
     }
 
     fn writing_screen(&mut self, ui: &egui::Ui, events: &[Event]) {
         let Screen::Writing(session) = &mut self.screen else { return };
         let mut leave = false;
+        let mut name = false;
         // Reading back is only for after the goal: until then the page only
         // goes forward.
         let page_height = ui.max_rect().height() * 0.8;
         for event in events {
+            // The name line takes the keys while it's up.
+            if let Some(naming) = &mut session.naming {
+                match event {
+                    Event::Text(text) => {
+                        let room = NAME_CHARS.saturating_sub(naming.name.chars().count());
+                        naming.name.extend(text.chars().filter(|&c| page::allowed_in_name(c)).take(room));
+                        naming.problem = None;
+                    }
+                    Event::Key { key: Key::Backspace, pressed: true, .. } => {
+                        naming.name.pop();
+                        naming.problem = None;
+                    }
+                    Event::Key { key: Key::Enter, pressed: true, .. } => name = true,
+                    Event::Key { key: Key::Escape, pressed: true, .. } => {
+                        leave = naming.leaving;
+                        session.naming = None;
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             match event {
                 Event::Text(text) => match &mut session.panic {
                     Some(typed) => push_limited(typed, text, PANIC_SENTENCE.len() + 20),
@@ -456,7 +563,7 @@ impl WriterApp {
                     };
                     session.scroll += delta.y * step;
                 }
-                Event::Key { key, pressed: true, .. } => match (key, &mut session.panic) {
+                Event::Key { key, pressed: true, modifiers, .. } => match (key, &mut session.panic) {
                     (Key::Enter, Some(typed)) => {
                         if typed == PANIC_SENTENCE {
                             session.released = true;
@@ -477,18 +584,36 @@ impl WriterApp {
                     (Key::PageUp, None) if session.reached => session.scroll += page_height,
                     (Key::PageDown, None) => session.scroll -= page_height,
                     (Key::End, None) => session.scroll = 0.0,
+                    // Saving is for once the goal is reached; until then the
+                    // page saves itself and the screen stays empty.
+                    (Key::S, None) if modifiers.command && session.reached => {
+                        if page::is_unnamed(session.page.path()) {
+                            session.naming = Some(Naming::default());
+                        } else if session.save() {
+                            session.note = Some((format!("Saved: {}", short_path(session.page.path())), Instant::now()));
+                        }
+                    }
                     (Key::Escape, Some(_)) => session.panic = None,
                     (Key::Escape, None) => {
-                        if !session.locked() {
+                        if session.locked() {
+                            if self.settings.panic_exit {
+                                session.panic = Some(String::new());
+                            }
+                        } else if page::is_unnamed(session.page.path()) && !session.page.is_blank() {
+                            // Writing with no name asks for one on the way out.
+                            session.naming = Some(Naming { leaving: true, ..Naming::default() });
+                        } else {
                             leave = true;
-                        } else if self.settings.panic_exit {
-                            session.panic = Some(String::new());
                         }
                     }
                     _ => {}
                 },
                 _ => {}
             }
+        }
+        if name {
+            let leaving = session.naming.as_ref().is_some_and(|naming| naming.leaving);
+            leave |= session.name(&self.pages) && leaving;
         }
         session.check_goal();
         // Only leave once the page is safely saved.
@@ -532,22 +657,44 @@ impl WriterApp {
             painter.text(bottom - vec2(0.0, 48.0), Align2::CENTER_BOTTOM, prompt, note.clone(), FAINT);
             painter.text(bottom - vec2(0.0, 24.0), Align2::CENTER_BOTTOM, PANIC_SENTENCE, note.clone(), FAINT);
             painter.text(bottom, Align2::CENTER_BOTTOM, format!("{typed}_"), note, INK);
+        } else if let Some(naming) = &session.naming {
+            let line = painter.layout_no_wrap(format!("Save as: {}", naming.name), note.clone(), INK);
+            let pos = pos2(left, bottom.y - 24.0 - line.size().y);
+            let caret = Rect::from_min_size(pos + vec2(line.size().x + 1.0, 0.0), vec2(2.0, line.size().y));
+            painter.galley(pos, line, INK);
+            painter.rect_filled(caret, 0.0, FAINT);
+            let unnamed = stem(session.page.path());
+            let hint = match (&naming.problem, page::named_file(&self.pages, &naming.name), naming.leaving) {
+                (Some(problem), ..) => problem.clone(),
+                (None, Ok(to), false) => format!("Enter saves it as {}. Esc cancels.", short_path(&to)),
+                (None, Ok(to), true) => format!("Enter saves it as {} and leaves. Esc leaves it as {unnamed}.", short_path(&to)),
+                (None, Err(_), false) => "A name for the page. Esc cancels.".to_owned(),
+                (None, Err(_), true) => format!("A name for the page, or Esc to leave it as {unnamed}."),
+            };
+            painter.text(pos2(left, bottom.y), Align2::LEFT_BOTTOM, hint, note, FAINT);
         } else if session.scroll > 0.0 {
             let reading = "Reading back. Type, or press End, to return to the end.";
             painter.text(bottom, Align2::CENTER_BOTTOM, reading, note, FAINT);
+        } else if let Some((saved, _)) = session.note.as_ref().filter(|(_, at)| at.elapsed() < NOTE_FOR) {
+            painter.text(bottom, Align2::CENTER_BOTTOM, saved, note, FAINT);
         } else if session.reached {
             let tally = tally(session.page.session_words(), session.elapsed());
-            let done = format!("Goal reached: {tally}. Esc to leave, or keep writing.");
+            let done = if page::is_unnamed(session.page.path()) {
+                format!("Goal reached: {tally}. Ctrl+S names it. Esc to leave, or keep writing.")
+            } else {
+                format!("Goal reached: {tally}. Esc to leave, or keep writing.")
+            };
             painter.text(bottom, Align2::CENTER_BOTTOM, done, note, FAINT);
         }
     }
 }
 
-/// Starts a session on today's page if `input` is a valid goal.
-fn begin(pages: &Path, logbook: &Option<Logbook>, input: &str) -> Result<Option<Session>, String> {
+/// Starts a session if `input` is a valid goal: on `page` if one was chosen,
+/// or else on a new one.
+fn begin(pages: &Path, logbook: &Option<Logbook>, input: &str, page: Option<&Path>) -> Result<Option<Session>, String> {
     let Ok(Some(goal)) = Goal::parse(input) else { return Ok(None) };
-    let page = Page::open(page::today_file(pages))
-        .map_err(|e| format!("Couldn't open today's page: {e}"))?;
+    let path = page.map_or_else(|| page::new_file(pages, Local::now()), Path::to_owned);
+    let page = Page::open(path).map_err(|e| format!("Couldn't open the page: {e}"))?;
     let mut session = Session::new(page, goal, logbook.clone());
     // Writes the running line, so even a session cut short at once is logged.
     session.save();
@@ -562,6 +709,20 @@ fn tally(words: usize, elapsed: Duration) -> String {
         0 => format!("{words} in under a minute"),
         1 => format!("{words} in 1 minute"),
         minutes => format!("{words} in {minutes} minutes"),
+    }
+}
+
+/// A page's name: its file name without `.txt`.
+fn stem(path: &Path) -> String {
+    path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// A page's file with just its folder, e.g. `Writing\Short story.txt`.
+fn short_path(path: &Path) -> String {
+    let file = path.file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
+    match path.parent().and_then(Path::file_name) {
+        Some(folder) => format!("{}\\{file}", folder.to_string_lossy()),
+        None => file.into_owned(),
     }
 }
 
@@ -753,6 +914,26 @@ mod tests {
         Entry { date: Local::now().date_naive(), start, goal, words, minutes, outcome }
     }
 
+    /// The one page in a test's folder, and what's on it.
+    fn only_page(pages: &Path) -> (PathBuf, String) {
+        let list = page::all_pages(pages);
+        assert_eq!(list.len(), 1, "{list:?}");
+        let path = list[0].path.clone();
+        let text = std::fs::read_to_string(&path).unwrap();
+        (path, text)
+    }
+
+    fn ctrl_s() -> Option<Event> {
+        Some(Event::Key { key: Key::S, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND })
+    }
+
+    fn session<'a>(h: &'a Harness<'_, WriterApp>) -> &'a Session {
+        match &h.state().screen {
+            Screen::Writing(session) => session,
+            Screen::Start(_) => panic!("no session"),
+        }
+    }
+
     #[test]
     fn lock_holds_until_the_goal_then_lets_go() {
         use ViewportCommand::{CancelClose, Close, Focus, Minimized};
@@ -789,14 +970,18 @@ mod tests {
         frame(&mut h, Some(true), false, false, Some(Event::Text("Hej æøå @ é".to_owned())));
         assert!(!frame(&mut h, Some(true), false, false, press(Key::Escape)).contains(&Close));
 
-        // Goal reached: no longer on top, closing allowed, Esc leaves.
+        // Goal reached: no longer on top, closing allowed, Esc leaves. The
+        // page has no name, so the first Esc asks for one, and the second
+        // leaves it under its time.
         std::thread::sleep(Duration::from_millis(2300).saturating_sub(started.elapsed()));
         let commands = frame(&mut h, Some(true), false, false, None);
         assert!(commands.contains(&ViewportCommand::WindowLevel(WindowLevel::Normal)));
         assert!(!frame(&mut h, Some(false), false, true, None).iter().any(|c| *c == CancelClose || *c == Focus));
+        assert!(!frame(&mut h, Some(true), false, false, press(Key::Escape)).contains(&Close));
         assert!(frame(&mut h, Some(true), false, false, press(Key::Escape)).contains(&Close));
 
-        let saved = std::fs::read_to_string(page::today_file(&pages)).unwrap();
+        let (path, saved) = only_page(&pages);
+        assert!(page::is_unnamed(&path), "{path:?}");
         assert_eq!(saved, "Hej æøå @ é");
         let logged = log_of(&pages).entries();
         assert_eq!(logged.len(), 1);
@@ -815,7 +1000,7 @@ mod tests {
         frame(&mut h, Some(true), false, false, Some(Event::Text(PANIC_SENTENCE["I choose to stop".len()..].to_owned())));
         assert!(frame(&mut h, Some(true), false, false, press(Key::Enter)).contains(&ViewportCommand::Close));
         assert!(!frame(&mut h, Some(true), false, true, None).contains(&ViewportCommand::CancelClose));
-        assert_eq!(std::fs::read_to_string(page::today_file(&pages)).unwrap(), "Some words");
+        assert_eq!(only_page(&pages).1, "Some words");
         let logged = log_of(&pages).entries();
         assert_eq!((logged.len(), logged[0].words, logged[0].outcome), (1, 2, Outcome::LeftEarly));
         let _ = std::fs::remove_dir_all(&pages);
@@ -833,22 +1018,35 @@ mod tests {
     }
 
     #[test]
-    fn an_unfinished_session_is_offered_again() {
+    fn an_unfinished_session_is_offered_again_on_its_page() {
         let pages = scratch("unfinished");
+        std::fs::create_dir_all(&pages).unwrap();
+        let story = pages.join("Short story.txt");
+        std::fs::write(&story, "Once upon a time").unwrap();
         // Cut off at 312 of 500 words this morning: Task Manager, or a crash.
         let cut = entry(Goal::Words(500), 312, 9, Outcome::Unfinished);
-        log_of(&pages).write_running(&cut).unwrap();
+        log_of(&pages).write_running(&cut, &story).unwrap();
 
         let mut h = start_screen(&pages);
         let Screen::Start(start) = &h.state().screen else { panic!("not the start screen") };
         assert_eq!(start.suggested, Some(Goal::Words(188)));
         assert_eq!(start.unfinished_from, Some(cut.start));
-        assert_eq!(log_of(&pages).entries(), vec![cut], "the cut session is logged");
+        assert_eq!(start.page.as_ref().map(|page| page.name.as_str()), Some("Short story"));
+        assert_eq!(log_of(&pages).entries(), vec![cut.clone()], "the cut session is logged");
 
         h.key_press(Key::Enter);
         h.step();
-        let Screen::Writing(session) = &h.state().screen else { panic!("Enter takes the offer") };
-        assert_eq!(session.goal, Goal::Words(188));
+        assert_eq!(session(&h).goal, Goal::Words(188), "Enter takes the offer");
+        assert_eq!(session(&h).page.path(), story);
+
+        // Choosing a new page instead lets the offer go.
+        log_of(&pages).write_running(&cut, &story).unwrap();
+        let mut h = start_screen(&pages);
+        h.key_press(Key::Escape);
+        h.step();
+        let Screen::Start(start) = &h.state().screen else { panic!("Esc is a step back, not out") };
+        assert_eq!((start.page.is_none(), start.unfinished_from), (true, None));
+        assert_eq!(start.suggested, Some(Goal::Words(500)), "the goal it was cut from");
         let _ = std::fs::remove_dir_all(&pages);
     }
 
@@ -859,7 +1057,8 @@ mod tests {
         yesterday.date = yesterday.date.pred_opt().unwrap();
         log_of(&pages).finish(&yesterday).unwrap();
         // Left early today: logged, but nothing to offer.
-        log_of(&pages).write_running(&entry(Goal::Words(500), 40, 3, Outcome::LeftEarly)).unwrap();
+        let left = entry(Goal::Words(500), 40, 3, Outcome::LeftEarly);
+        log_of(&pages).write_running(&left, &pages.join("2026-11-03 09.14.txt")).unwrap();
 
         let mut h = start_screen(&pages);
         let Screen::Start(start) = &h.state().screen else { panic!("not the start screen") };
@@ -904,7 +1103,7 @@ mod tests {
         frame(&mut h, Some(true), false, false, press(Key::PageUp));
         let furthest = scroll(&h);
         frame(&mut h, Some(true), false, false, press(Key::PageUp));
-        assert_eq!(scroll(&h), furthest, "it stops at the top of the day");
+        assert_eq!(scroll(&h), furthest, "it stops at the top of the page");
         frame(&mut h, Some(true), false, false, press(Key::PageDown));
         assert!(scroll(&h) < furthest);
 
@@ -976,13 +1175,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&pages2);
     }
 
-    /// A pages folder with two days and a saved copy.
+    /// A pages folder with two days' pages from before pages had names, and a
+    /// copy saved back then, written to last.
     fn written_before(name: &str) -> PathBuf {
         let pages = scratch(name);
-        std::fs::create_dir_all(page::copies_dir(&pages)).unwrap();
-        std::fs::write(pages.join("2026-09-01.txt"), "An old page,\nfrom September.").unwrap();
-        std::fs::write(pages.join("2026-10-20.txt"), "A newer one.").unwrap();
-        std::fs::write(page::copies_dir(&pages).join("Short story.txt"), "Once upon a time").unwrap();
+        std::fs::create_dir_all(pages.join("Saved")).unwrap();
+        let write = |path: PathBuf, text: &str, days_ago: u64| {
+            std::fs::write(&path, text).unwrap();
+            let when = std::time::SystemTime::now() - Duration::from_secs(days_ago * 86_400);
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(when).unwrap();
+        };
+        write(pages.join("2026-09-01.txt"), "An old page,\nfrom September.", 60);
+        write(pages.join("2026-10-20.txt"), "A newer one.", 10);
+        write(pages.join("Saved").join("Short story.txt"), "Once upon a time", 1);
         pages
     }
 
@@ -1005,12 +1210,13 @@ mod tests {
         h.run_steps(2);
         let rows = menu(&h).expect("the menu is open").rows();
         assert_eq!(rows.len(), 4);
-        assert!(rows[0].trim_start().starts_with("20 October 2026"), "newest first: {rows:?}");
-        assert!(rows[1].trim_start().starts_with("1 September 2026"));
-        assert_eq!(rows[2], "Short story");
+        assert!(rows[0].starts_with("Short story ") && rows[0].ends_with("Yesterday"), "last written first: {rows:?}");
+        assert!(rows[1].starts_with("2026-10-20 "));
+        assert!(rows[2].starts_with("2026-09-01 "));
         assert_eq!(rows[3], format!("Open the {} folder", pages.file_name().unwrap().to_string_lossy()));
 
-        // Down, Enter: the older page, read-only.
+        // Down, Enter: the oldest page, read-only.
+        h.key_press(Key::ArrowDown);
         h.key_press(Key::ArrowDown);
         h.key_press(Key::Enter);
         h.run_steps(2);
@@ -1025,69 +1231,152 @@ mod tests {
         h.key_press(Key::Escape);
         h.run_steps(2);
         assert_eq!(menu(&h).unwrap().reading(), None);
-        assert_eq!(menu(&h).unwrap().selected(), 1);
+        assert_eq!(menu(&h).unwrap().selected(), 2);
         h.key_press(Key::Escape);
         h.run_steps(2);
         let Screen::Start(start) = &h.state().screen else { panic!("not the start screen") };
-        assert!(start.menu.is_none());
+        assert!(start.menu.is_none() && start.page.is_none());
         assert_eq!(start.input, "50", "the goal typed before is still there");
 
         // Tab opens it too; clicking a line opens it.
         h.key_press(Key::Tab);
         h.run_steps(2);
-        h.get_by_label("Short story").click();
+        let first = menu(&h).unwrap().rows()[0].clone();
+        h.get_by_label(&first).click();
         h.run_steps(2);
         assert_eq!(menu(&h).unwrap().reading(), Some("Once upon a time"));
         let _ = std::fs::remove_dir_all(&pages);
     }
 
     #[test]
-    fn a_named_copy_is_saved_and_listed() {
-        let pages = written_before("copy");
+    fn an_earlier_page_is_written_on_from_the_menu() {
+        let pages = written_before("write-on");
+        let story = pages.join("Saved").join("Short story.txt");
         let mut h = start_screen(&pages);
-        let save = || Event::Key {
-            key: Key::S,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::COMMAND,
+        let chosen = |h: &Harness<'_, WriterApp>| match &h.state().screen {
+            Screen::Start(start) if start.menu.is_none() => start.page.as_ref().map(|page| page.path.clone()),
+            _ => panic!("not on the start line"),
         };
+
+        // Read it, then "Write on it": back on the start line, with it chosen.
         h.key_press(Key::Tab);
         h.key_press(Key::Enter);
         h.run_steps(2);
-        h.event(save());
+        h.get_by_label("Write on it").click();
+        h.run_steps(2);
+        assert_eq!(chosen(&h), Some(story.clone()));
+
+        // "New page" goes back to a blank one; Enter while reading chooses it again.
+        h.get_by_label("New page").click();
+        h.run_steps(2);
+        assert_eq!(chosen(&h), None);
+        h.key_press(Key::Tab);
+        h.key_press(Key::Enter);
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        assert_eq!(chosen(&h), Some(story.clone()));
+
+        // The session goes on at the end, on a new paragraph, and only the
+        // new words count. It has a name, so Ctrl+S just saves.
+        h.event(Event::Text("3".to_owned()));
+        h.key_press(Key::Enter);
+        h.event(Event::Text("And then three".to_owned()));
+        h.run_steps(2);
+        assert!(session(&h).reached);
+        h.event(ctrl_s().unwrap());
+        h.run_steps(2);
+        assert!(session(&h).naming.is_none());
+        assert_eq!(std::fs::read_to_string(&story).unwrap(), "Once upon a time\n\nAnd then three");
+        assert_eq!(page::all_pages(&pages).len(), 3, "no new page");
+        let _ = std::fs::remove_dir_all(&pages);
+    }
+
+    #[test]
+    fn ctrl_s_names_a_new_page_once_the_goal_is_reached() {
+        let pages = scratch("naming");
+        std::fs::create_dir_all(&pages).unwrap();
+        std::fs::write(pages.join("Taken.txt"), "Someone else's").unwrap();
+        let mut h = start_screen(&pages);
+        h.event(Event::Text("3".to_owned()));
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        let unnamed = session(&h).page.path().to_owned();
+        assert!(page::is_unnamed(&unnamed), "{unnamed:?}");
+
+        // Before the goal, Ctrl+S does nothing.
+        h.event(Event::Text("One two".to_owned()));
+        h.event(ctrl_s().unwrap());
+        h.run_steps(2);
+        assert!(session(&h).naming.is_none());
+
+        h.event(Event::Text(" three".to_owned()));
+        h.event(ctrl_s().unwrap());
         h.event(Event::Text("Short/story?".to_owned()));
         h.run_steps(2);
-        assert_eq!(menu(&h).unwrap().naming().map(|n| n.0), Some("Shortstory"), "no / or ? in a file name");
+        let naming = session(&h).naming.as_ref().expect("asks for a name");
+        assert_eq!(naming.name, "Shortstory", "no / or ? in a file name");
 
-        // A name that's taken asks first; the second Enter replaces it.
+        // A name that's taken is refused, and that page left alone.
         for _ in 0.."Shortstory".len() {
             h.key_press(Key::Backspace);
         }
+        h.event(Event::Text("taken".to_owned()));
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        let problem = session(&h).naming.as_ref().and_then(|naming| naming.problem.clone());
+        assert!(problem.unwrap().contains("already a page called taken"));
+        assert_eq!(std::fs::read_to_string(pages.join("Taken.txt")).unwrap(), "Someone else's");
+
+        // Esc cancels; typing goes on the page again.
+        h.key_press(Key::Escape);
+        h.event(Event::Text(" four".to_owned()));
+        h.run_steps(2);
+        assert!(session(&h).naming.is_none());
+
+        // Named: the file moves, and what's written after goes into it.
+        h.event(ctrl_s().unwrap());
         h.event(Event::Text("Short story".to_owned()));
         h.key_press(Key::Enter);
         h.run_steps(2);
-        let (_, problem) = menu(&h).unwrap().naming().expect("still naming");
-        assert!(problem.unwrap().contains("already a copy called Short story"));
-        let copy = page::copies_dir(&pages).join("Short story.txt");
-        assert_eq!(std::fs::read_to_string(&copy).unwrap(), "Once upon a time");
-        h.key_press(Key::Enter);
+        let story = pages.join("Short story.txt");
+        assert_eq!(session(&h).page.path(), story);
+        assert!(!unnamed.exists());
+        h.event(Event::Text(" five".to_owned()));
+        h.event(ctrl_s().unwrap());
         h.run_steps(2);
-        assert!(menu(&h).unwrap().naming().is_none(), "saved");
-        assert_eq!(std::fs::read_to_string(&copy).unwrap(), "A newer one.");
-
-        // A new name, through the link this time; back in the list, it's there.
-        h.get_by_label("Save a copy").click();
-        h.run_steps(2);
-        h.event(Event::Text("Draft".to_owned()));
-        h.key_press(Key::Enter);
-        h.run_steps(2);
-        assert_eq!(std::fs::read_to_string(page::copies_dir(&pages).join("Draft.txt")).unwrap(), "A newer one.");
-        h.key_press(Key::Escape);
-        h.run_steps(2);
-        let rows = menu(&h).unwrap().rows();
-        assert!(rows.contains(&"Draft".to_owned()) && rows.contains(&"Short story".to_owned()), "{rows:?}");
+        assert!(session(&h).naming.is_none(), "named pages just save");
+        assert_eq!(std::fs::read_to_string(&story).unwrap(), "One two three four five");
+        let (_, running) = log_of(&pages).recover().expect("still running");
+        assert_eq!(running, Some(story), "the running line follows the page");
         let _ = std::fs::remove_dir_all(&pages);
+    }
+
+    #[test]
+    fn leaving_a_page_without_a_name_asks_for_one() {
+        let pages = scratch("leave-naming");
+        let mut h = start_screen(&pages);
+        h.event(Event::Text("1".to_owned()));
+        h.key_press(Key::Enter);
+        h.event(Event::Text("Note".to_owned()));
+        h.run_steps(2);
+        assert!(!frame(&mut h, Some(true), false, false, press(Key::Escape)).contains(&ViewportCommand::Close));
+        assert!(session(&h).naming.as_ref().is_some_and(|naming| naming.leaving));
+        frame(&mut h, Some(true), false, false, Some(Event::Text("Shopping".to_owned())));
+        assert!(frame(&mut h, Some(true), false, false, press(Key::Enter)).contains(&ViewportCommand::Close));
+        assert_eq!(only_page(&pages), (pages.join("Shopping.txt"), "Note".to_owned()));
+
+        // Nothing written: nothing to name, Esc just leaves.
+        let pages2 = scratch("leave-blank");
+        let mut h = start_screen(&pages2);
+        h.event(Event::Text("1s".to_owned()));
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        std::thread::sleep(Duration::from_millis(1100));
+        frame(&mut h, Some(true), false, false, None);
+        assert!(frame(&mut h, Some(true), false, false, press(Key::Escape)).contains(&ViewportCommand::Close));
+        assert!(page::all_pages(&pages2).is_empty());
+        let _ = std::fs::remove_dir_all(&pages);
+        let _ = std::fs::remove_dir_all(&pages2);
     }
 
     #[test]
@@ -1182,7 +1471,7 @@ mod tests {
     #[test]
     fn time_behind_the_terminal_does_not_count() {
         let pages = scratch("terminal-time");
-        let page = Page::open(page::today_file(&pages)).unwrap();
+        let page = Page::open(page::new_file(&pages, Local::now())).unwrap();
         let mut session = Session::new(page, Goal::Time(25 * 60), None);
         let start = session.started;
         let at = |seconds| start + Duration::from_secs(seconds);
@@ -1270,8 +1559,15 @@ mod tests {
             modifiers: Default::default(),
         });
         shot(&mut harness, "4-reading-back");
-        harness.key_press(Key::Escape);
-        harness.run_steps(2);
+
+        // Named once it's done.
+        harness.key_press(Key::End);
+        harness.event(ctrl_s().unwrap());
+        harness.event(Event::Text("Short story".to_owned()));
+        shot(&mut harness, "5-naming");
+        harness.key_press(Key::Enter);
+        shot(&mut harness, "6-named");
+        drop(harness);
 
         // Cut off part way, with nothing to end it properly.
         let mut harness = app(Settings { panic_exit: true, ..Settings::default() });
@@ -1281,26 +1577,27 @@ mod tests {
         harness.event(Event::Text(THIRD.to_owned()));
         harness.key_press(Key::Escape);
         harness.event(Event::Text("I choose to stop".to_owned()));
-        shot(&mut harness, "5-panic-exit");
+        shot(&mut harness, "7-panic-exit");
         drop(harness);
 
         // The next start offers the rest of it...
         let mut harness = app(Settings::default());
-        shot(&mut harness, "6-start-unfinished");
+        shot(&mut harness, "8-start-unfinished");
         drop(harness);
 
         // ...and after that, suggests the goal again.
         let mut harness = app(Settings::default());
-        shot(&mut harness, "7-start-again");
+        shot(&mut harness, "9-start-again");
 
         // The menu, with a few older pages to list.
-        let today = Local::now().date_naive();
-        for (days_ago, text) in [(3, THIRD), (40, SECOND)] {
-            let day = today - chrono::Duration::days(days_ago);
-            std::fs::write(pages.join(format!("{}.txt", day.format("%Y-%m-%d"))), text).unwrap();
+        for (name, days_ago, text) in [("2026-10-29", 5, THIRD), ("Brev til Åse", 12, SECOND), ("2026-09-24", 40, FIRST)] {
+            let path = pages.join(format!("{name}.txt"));
+            std::fs::write(&path, text).unwrap();
+            let when = std::time::SystemTime::now() - Duration::from_secs(days_ago * 86_400);
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(when).unwrap();
         }
         harness.key_press(Key::Tab);
-        shot(&mut harness, "8-menu");
+        shot(&mut harness, "10-menu");
         harness.key_press(Key::Enter);
         harness.event(Event::MouseWheel {
             unit: MouseWheelUnit::Line,
@@ -1309,20 +1606,9 @@ mod tests {
             source: egui::MouseWheelSource::Unknown,
             modifiers: Default::default(),
         });
-        shot(&mut harness, "9-reading");
-        harness.event(Event::Key {
-            key: Key::S,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::COMMAND,
-        });
-        harness.event(Event::Text("Short story".to_owned()));
-        shot(&mut harness, "10-save-copy");
+        shot(&mut harness, "11-reading");
         harness.key_press(Key::Enter);
-        shot(&mut harness, "11-saved");
-        harness.key_press(Key::Escape);
-        shot(&mut harness, "12-menu-with-copy");
+        shot(&mut harness, "12-start-on-a-page");
 
         let _ = std::fs::remove_dir_all(&pages);
     }

@@ -1,17 +1,17 @@
 use std::path::{Path, PathBuf};
 
-use chrono::{Local, NaiveDate};
+use chrono::{Datelike, Local, NaiveDate};
 use eframe::egui::{self, Align2, CursorIcon, Event, FontId, Key, MouseWheelUnit, Pos2, Rect, Role, Sense, WidgetInfo, pos2, vec2};
 
 use crate::app::{FAINT, INK, LINE_SCROLL, NOTE_SIZE, TEXT_SIZE, column};
-use crate::page::{self, Listed, Title};
+use crate::page::{self, Listed};
 
-/// How long a copy's name can be, in characters.
-const NAME_CHARS: usize = 60;
 const ROW_HEIGHT: f32 = TEXT_SIZE * 1.6;
+/// Where the "when" column starts in a row, in characters.
+const WHEN_COLUMN: usize = 32;
 
-/// The menu on the start screen: earlier pages and saved copies, to read and
-/// to save a named copy of. Nothing in it can change a page.
+/// The menu on the start screen: the pages written so far, to read and to
+/// choose one to write on. Nothing in it can change a page.
 pub struct Menu {
     pages: PathBuf,
     items: Vec<Item>,
@@ -32,25 +32,15 @@ struct Reading {
     listed: Listed,
     text: String,
     scroll: f32,
-    /// The name being typed, while saving a copy.
-    naming: Option<Naming>,
-    /// Where the last copy went.
-    note: Option<String>,
 }
 
-#[derive(Default)]
-struct Naming {
-    name: String,
-    /// Set by Enter on a name that's taken; another Enter replaces that copy.
-    replace: bool,
-    problem: Option<String>,
-}
-
-/// Whether the menu is still open after a frame.
+/// What became of the menu after a frame.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Outcome {
     Open,
     Closed,
+    /// "Write on it": the next session goes on this page.
+    WriteOn(Listed),
 }
 
 impl Menu {
@@ -67,8 +57,7 @@ impl Menu {
 
     pub fn show(&mut self, ui: &egui::Ui, events: &[Event]) -> Outcome {
         if self.reading.is_some() {
-            self.reading_screen(ui, events);
-            Outcome::Open
+            self.reading_screen(ui, events)
         } else {
             self.list_screen(ui, events)
         }
@@ -173,21 +162,11 @@ impl Menu {
         Outcome::Open
     }
 
-    /// The list's lines: headings, gaps and items, in order.
+    /// The list's lines: a heading, the pages, and the folder below a gap.
     fn lines(&self) -> Vec<Line> {
-        let is_day = |item: &Item| matches!(item, Item::Page(Listed { title: Title::Day(_), .. }));
-        let is_copy = |item: &Item| matches!(item, Item::Page(Listed { title: Title::Copy(_), .. }));
-        let mut lines = vec![Line::Heading(if self.items.iter().any(is_day) {
-            "Your pages"
-        } else {
-            "Nothing written yet."
-        })];
-        let mut in_copies = false;
+        let any = self.items.iter().any(|item| matches!(item, Item::Page(_)));
+        let mut lines = vec![Line::Heading(if any { "Your pages" } else { "Nothing written yet." })];
         for (index, item) in self.items.iter().enumerate() {
-            if is_copy(item) && !in_copies {
-                in_copies = true;
-                lines.extend([Line::Gap, Line::Heading("Saved copies")]);
-            }
             if matches!(item, Item::OpenFolder) {
                 lines.push(Line::Gap);
             }
@@ -196,55 +175,35 @@ impl Menu {
         lines
     }
 
-    fn reading_screen(&mut self, ui: &egui::Ui, events: &[Event]) {
-        let Some(reading) = &mut self.reading else { return };
+    fn reading_screen(&mut self, ui: &egui::Ui, events: &[Event]) -> Outcome {
+        let Some(reading) = &mut self.reading else { return Outcome::Open };
         let rect = ui.max_rect();
         let (left, width) = column(ui.painter(), rect);
         let (top, bottom) = (rect.top() + 80.0, rect.bottom() - 104.0);
         let visible = bottom - top;
         let mut back = false;
-        let mut save = false;
+        let mut write = false;
         for event in events {
-            match (&mut reading.naming, event) {
-                (_, Event::MouseWheel { unit, delta, .. }) => reading.scroll -= delta.y * wheel_step(*unit, visible),
-                (Some(naming), Event::Text(text)) => {
-                    let room = NAME_CHARS.saturating_sub(naming.name.chars().count());
-                    naming.name.extend(text.chars().filter(|&c| page::allowed_in_name(c)).take(room));
-                    (naming.replace, naming.problem) = (false, None);
-                }
-                (Some(naming), Event::Key { key, pressed: true, .. }) => match key {
-                    Key::Backspace => {
-                        naming.name.pop();
-                        (naming.replace, naming.problem) = (false, None);
-                    }
-                    Key::Enter => save = true,
-                    Key::Escape => reading.naming = None,
-                    _ => {}
-                },
-                (None, Event::Key { key, pressed: true, modifiers, .. }) => match key {
+            match event {
+                Event::MouseWheel { unit, delta, .. } => reading.scroll -= delta.y * wheel_step(*unit, visible),
+                Event::Key { key, pressed: true, .. } => match key {
                     Key::ArrowDown => reading.scroll += LINE_SCROLL,
                     Key::ArrowUp => reading.scroll -= LINE_SCROLL,
                     Key::PageDown => reading.scroll += visible * 0.8,
                     Key::PageUp => reading.scroll -= visible * 0.8,
                     Key::Home => reading.scroll = 0.0,
                     Key::End => reading.scroll = f32::MAX,
-                    Key::S if modifiers.command => {
-                        reading.naming = Some(Naming::default());
-                        reading.note = None;
-                    }
+                    Key::Enter => write = true,
                     Key::Escape => back = true,
                     _ => {}
                 },
                 _ => {}
             }
         }
-        if save {
-            reading.save(&self.pages);
-        }
 
         let painter = ui.painter();
         let note = FontId::monospace(NOTE_SIZE);
-        let heading = format!("{} · {}", heading(&reading.listed, Local::now().date_naive()), words(reading.listed.words));
+        let heading = format!("{} · {}", reading.listed.name, words(reading.listed.words));
         painter.text(pos2(left, rect.top() + 32.0), Align2::LEFT_TOP, heading, note.clone(), FAINT);
 
         let galley = painter.layout(reading.text.clone(), FontId::monospace(TEXT_SIZE), INK, width + 0.5);
@@ -255,76 +214,31 @@ impl Menu {
         }
         clipped.galley(pos2(left, top - reading.scroll), galley, INK);
 
+        // "Write on it · Back", centred along the bottom.
         let base = rect.center_bottom() - vec2(0.0, 24.0);
-        if let Some(naming) = &reading.naming {
-            let line = painter.layout_no_wrap(format!("Save as: {}", naming.name), note.clone(), INK);
-            let pos = pos2(left, base.y - 48.0 - line.size().y);
-            let caret = Rect::from_min_size(pos + vec2(line.size().x + 1.0, 0.0), vec2(2.0, line.size().y));
-            painter.galley(pos, line, INK);
-            painter.rect_filled(caret, 0.0, FAINT);
-            let hint = match (&naming.problem, page::copy_path(&self.pages, &naming.name)) {
-                (Some(problem), _) => problem.clone(),
-                (None, Ok(path)) => format!("Enter saves it as {}. Esc cancels.", path.display()),
-                (None, Err(_)) => "A name for the copy. Esc cancels.".to_owned(),
-            };
-            painter.text(pos2(left, base.y - 24.0), Align2::LEFT_BOTTOM, hint, note, FAINT);
-        } else {
-            if let Some(saved) = &reading.note {
-                painter.text(base - vec2(0.0, 24.0), Align2::CENTER_BOTTOM, saved, note.clone(), FAINT);
-            }
-            // "Save a copy · Back", centred along the bottom.
-            let separator = " · ";
-            let width_of = |text: &str| painter.layout_no_wrap(text.to_owned(), note.clone(), FAINT).size().x;
-            let total = width_of("Save a copy") + width_of(separator) + width_of("Back");
-            let mut x = base.x - total / 2.0;
-            if link(ui, pos2(x, base.y), Align2::LEFT_BOTTOM, "Save a copy", "menu save").clicked() {
-                reading.naming = Some(Naming::default());
-                reading.note = None;
-            }
-            x += width_of("Save a copy");
-            painter.text(pos2(x, base.y), Align2::LEFT_BOTTOM, separator, note.clone(), FAINT);
-            x += width_of(separator);
-            back |= link(ui, pos2(x, base.y), Align2::LEFT_BOTTOM, "Back", "menu reading back").clicked();
-        }
+        let separator = " · ";
+        let width_of = |text: &str| painter.layout_no_wrap(text.to_owned(), note.clone(), FAINT).size().x;
+        let total = width_of("Write on it") + width_of(separator) + width_of("Back");
+        let mut x = base.x - total / 2.0;
+        write |= link(ui, pos2(x, base.y), Align2::LEFT_BOTTOM, "Write on it", "menu write").clicked();
+        x += width_of("Write on it");
+        painter.text(pos2(x, base.y), Align2::LEFT_BOTTOM, separator, note.clone(), FAINT);
+        x += width_of(separator);
+        back |= link(ui, pos2(x, base.y), Align2::LEFT_BOTTOM, "Back", "menu reading back").clicked();
 
+        if write {
+            return Outcome::WriteOn(reading.listed.clone());
+        }
         if back {
             self.reading = None;
-            // A copy may have been saved; it belongs in the list now.
-            self.items = items(&self.pages);
-            self.selected = self.selected.min(self.items.len() - 1);
         }
+        Outcome::Open
     }
 }
 
 impl Reading {
     fn new(listed: Listed) -> Self {
-        Self { text: page::read_text(&listed.path), listed, scroll: 0.0, naming: None, note: None }
-    }
-
-    /// Saves a copy under the typed name, unless the name is taken and this
-    /// isn't the second Enter.
-    fn save(&mut self, pages: &Path) {
-        let Some(naming) = &mut self.naming else { return };
-        let path = match page::copy_path(pages, &naming.name) {
-            Ok(path) => path,
-            Err(problem) => {
-                naming.problem = Some(problem.to_owned());
-                return;
-            }
-        };
-        if path.exists() && !naming.replace {
-            naming.replace = true;
-            let name = path.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default();
-            naming.problem = Some(format!("There's already a copy called {name}. Enter again to replace it."));
-            return;
-        }
-        match page::save_copy(&self.listed.path, &path) {
-            Ok(()) => {
-                self.naming = None;
-                self.note = Some(format!("Saved as {}", path.display()));
-            }
-            Err(e) => naming.problem = Some(format!("Couldn't save the copy: {e}")),
-        }
+        Self { text: page::read_text(&listed.path), listed, scroll: 0.0 }
     }
 }
 
@@ -345,22 +259,23 @@ impl Line {
     }
 }
 
-/// Pages newest first, then saved copies, then the folder.
+/// The pages, written to last first, then the folder.
 fn items(pages: &Path) -> Vec<Item> {
-    let listed = page::day_pages(pages).into_iter().chain(page::saved_copies(pages));
-    listed.map(Item::Page).chain([Item::OpenFolder]).collect()
+    page::all_pages(pages).into_iter().map(Item::Page).chain([Item::OpenFolder]).collect()
 }
 
 /// A line of the list: what it is, and its word count if it's a page.
 fn row_text(item: &Item, pages: &Path, today: NaiveDate) -> (String, Option<String>) {
     match item {
-        Item::Page(listed @ Listed { title: Title::Day(date), .. }) => {
-            let date = date.format("%-d %B %Y");
-            (format!("{:<12}{date}", day_name(listed, today)), Some(words(listed.words)))
-        }
-        Item::Page(listed @ Listed { title: Title::Copy(name), .. }) => {
-            let name = if name.chars().count() > 40 { format!("{}…", name.chars().take(39).collect::<String>()) } else { name.clone() };
-            (name, Some(words(listed.words)))
+        Item::Page(listed) => {
+            let room = WHEN_COLUMN - 2;
+            let name = if listed.name.chars().count() > room {
+                format!("{}…", listed.name.chars().take(room - 1).collect::<String>())
+            } else {
+                listed.name.clone()
+            };
+            let when = when(listed.written.date_naive(), today);
+            (format!("{name:<WHEN_COLUMN$}{when}"), Some(words(listed.words)))
         }
         Item::OpenFolder => {
             let folder = pages.file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
@@ -369,30 +284,19 @@ fn row_text(item: &Item, pages: &Path, today: NaiveDate) -> (String, Option<Stri
     }
 }
 
-/// "Today", "Yesterday", or the weekday within the last week; otherwise
-/// nothing, and the date says it.
-fn day_name(listed: &Listed, today: NaiveDate) -> String {
-    let Title::Day(date) = listed.title else { return String::new() };
+/// "Today", "Yesterday", or the weekday within the last week; otherwise the
+/// date, with the year if it isn't this one.
+fn when(date: NaiveDate, today: NaiveDate) -> String {
     match (today - date).num_days() {
         0 => "Today".to_owned(),
         1 => "Yesterday".to_owned(),
         2..=6 => date.format("%A").to_string(),
-        _ => String::new(),
+        _ if date.year() == today.year() => date.format("%-d %B").to_string(),
+        _ => date.format("%-d %B %Y").to_string(),
     }
 }
 
-/// The top line while reading: "Thursday, 22 October 2026" or the copy's name.
-fn heading(listed: &Listed, today: NaiveDate) -> String {
-    match &listed.title {
-        Title::Day(date) => match day_name(listed, today) {
-            name if name.is_empty() => date.format("%-d %B %Y").to_string(),
-            name => format!("{name}, {}", date.format("%-d %B %Y")),
-        },
-        Title::Copy(name) => name.clone(),
-    }
-}
-
-fn words(count: usize) -> String {
+pub fn words(count: usize) -> String {
     if count == 1 { "1 word".to_owned() } else { format!("{count} words") }
 }
 
@@ -439,10 +343,20 @@ impl Menu {
     pub fn reading(&self) -> Option<&str> {
         self.reading.as_ref().map(|reading| reading.text.as_str())
     }
+}
 
-    /// The name being typed for a copy, and what the line says about it.
-    pub fn naming(&self) -> Option<(&str, Option<&str>)> {
-        let naming = self.reading.as_ref()?.naming.as_ref()?;
-        Some((naming.name.as_str(), naming.problem.as_deref()))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn when_says_the_day_then_the_date() {
+        let day = |text| NaiveDate::parse_from_str(text, "%Y-%m-%d").unwrap();
+        let today = day("2026-11-03");
+        assert_eq!(when(today, today), "Today");
+        assert_eq!(when(day("2026-11-02"), today), "Yesterday");
+        assert_eq!(when(day("2026-10-29"), today), "Thursday");
+        assert_eq!(when(day("2026-10-27"), today), "27 October");
+        assert_eq!(when(day("2025-12-24"), today), "24 December 2025");
     }
 }

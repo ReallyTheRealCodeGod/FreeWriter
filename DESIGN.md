@@ -25,11 +25,14 @@ Settings > Apps that runs `uninstall.ps1`.
    (`25m`), press Enter. The line below confirms the goal as you type, and
    goals are capped (10,000 words, 240 minutes) so a typo can't lock you in
    for days. An empty line suggests the last goal, or the rest of an
-   unfinished session (see [the logbook](#3-the-logbook)).
+   unfinished session (see [the logbook](#3-the-logbook)). The session goes
+   on a new, blank page, or on an earlier one chosen in
+   [the menu](#menu-before-a-session).
 2. **Writing** — locked until the goal is met.
 3. **Goal reached** — the progress line completes and a quiet note says what
    you did and that you can leave (Esc). You can keep writing as long as you
-   like, or [read back](#4-reading-back-after-the-goal) through the day.
+   like, or [read back](#4-reading-back-after-the-goal) through the page.
+   Ctrl+S gives a new page its name (see [saving](#saving)).
 
 Word goals count words written *this session*, so earlier text doesn't count.
 Time goals are wall-clock minutes.
@@ -64,8 +67,27 @@ sentence, and typing it exactly lets you leave early.
 
 ## Saving
 
-- One file per day: `Documents\Writing\YYYY-MM-DD.txt`. A second session on
-  the same day continues the same file, with the earlier text above the line.
+- Each page is a plain text file in `Documents\Writing`. Starting Writer
+  gives a new, blank page. An earlier page can be chosen in the menu and
+  written on again; its text stays above the line.
+- A new page is saved from the first word, under the time it was begun
+  (`2026-11-03 14.05.txt`), until it has a name.
+- **Ctrl+S**, once the goal is reached, saves the page you're on. A page
+  without a name asks for one first, on one line at the bottom:
+
+      Save as: Short story_
+      Enter saves it as Writing\Short story.txt. Esc cancels.
+
+  The file is renamed, and whatever you write after goes into it.
+  Characters Windows doesn't allow in file names can't be typed, and a name
+  that's taken is refused, so naming never replaces another page. Before
+  the goal Ctrl+S does nothing: the page saves itself anyway, and the screen
+  stays empty.
+- Leaving with Esc after the goal, from a page with writing on it but no
+  name, brings up the same line once: Enter names it and leaves, Esc leaves
+  it under its time. It's in the menu either way.
+- A page whose name is only a date counts as unnamed: a new page not named
+  yet, or a day's page from before pages had names (`2026-10-29.txt`).
 - Autosave every few seconds and on exit.
 - Atomic writes (write to a temp file, then rename), so a crash or a
   Task Manager kill loses at most a few seconds.
@@ -86,17 +108,15 @@ mouse.
 - **Opening it:** a faint `Menu` in the top-left corner of the start screen.
   Click it (or press Tab). The mouse pointer shows on the start screen and
   in the menu, and is hidden again while writing.
-- **The list:** your pages, newest first, then any saved copies, each with
-  its word count, in the same Courier as the page:
+- **The list:** every page, the one written on last at the top, with when
+  that was and its word count, in the same Courier as the page:
 
       Menu
 
       Your pages
-        Today       27 October 2026         612 words
-        Thursday    22 October 2026         140 words
-
-      Saved copies
-        Short story                         612 words
+        Short story                   Today          612 words
+        2026-11-02 21.40              Yesterday      140 words
+        2026-10-29                    29 October      88 words
 
       Open the Writing folder
 
@@ -105,23 +125,18 @@ mouse.
   Click a line, or move with Up/Down and press Enter. The line under the
   pointer (or the keys) gets the same faint bar as the typing caret.
   Days within the last week are named (Today, Yesterday, Thursday); older
-  ones show just the date. The wheel scrolls a long list.
+  ones show the date. The wheel scrolls a long list. Copies saved in
+  `Writing\Saved` by an earlier version are listed too.
 - **Reading a page:** the page opens on the white paper, read-only, from the
   top. The wheel, PageUp/PageDown, Up/Down and Home/End scroll. Nothing can
-  be typed into it. Along the bottom: `Save a copy · Back`. Esc goes back to
+  be typed into it. Along the bottom: `Write on it · Back`. Esc goes back to
   the list.
-- **Save a copy:** asks for a name on one line, like the goal:
-
-      Save as: Short story_
-      Enter saves it as Documents\Writing\Saved\Short story.txt. Esc cancels.
-
-  The copy is a plain text file in a `Saved` folder next to the pages
-  (written the same safe way as the pages). Characters Windows doesn't allow
-  in file names can't be typed. If a copy with that name exists, the line
-  says so and a second Enter replaces it. Saved copies show up in the menu
-  and read the same way.
+- **Write on it** (or Enter while reading) goes back to the start line with
+  that page chosen; the line at the bottom names it. The session continues
+  the page on a new paragraph, and the words count from there, as always.
+  `New page` beside `Menu` (or Esc) goes back to a blank page.
 - **Open the Writing folder** opens it in Explorer, for anything else
-  (printing, opening in Word, deleting).
+  (printing, opening in Word, copying, deleting).
 - Esc from the list goes back to the start line, with whatever goal you'd
   typed still there.
 
@@ -218,7 +233,8 @@ One line per session, kept by the app, so it can tell you where you left off.
   `result` is `reached`, `left early` (the panic sentence) or `unfinished`
   (the session ended before its goal, e.g. through Task Manager or a crash).
 - **The session file:** while a session runs, its log line is also written
-  to `%APPDATA%\writer\session.tsv` on every autosave. Leaving properly
+  to `%APPDATA%\writer\session.tsv` on every autosave, with the page it's
+  on. Leaving properly
   (Esc or closing after the goal, or the panic sentence) moves the line into
   the log and deletes the file. If the file is still there when Writer
   starts, the last session didn't end properly: its line goes into the log
@@ -230,7 +246,7 @@ One line per session, kept by the app, so it can tell you where you left off.
       Unfinished from 09:14: 188 words to go. Enter to finish it.
 
   That's a fresh session with the remaining goal (words still to write, or
-  minutes still to go). Typing a different goal works as usual. The offer
+  minutes still to go), on the same page. Typing a different goal works as usual. The offer
   is made once, at the first start after the session was cut: by then it's
   in the log, and quitting or choosing another goal lets it go. An
   unfinished session from an earlier day is logged but not offered.
@@ -253,7 +269,7 @@ One line per session, kept by the app, so it can tell you where you left off.
 
 Until the goal, the page only goes forward and you can't scroll back to
 fiddle. Once the goal is reached, the mouse wheel and PageUp/PageDown scroll
-back through the whole day's page, so you can read what you wrote. It's
+back through the whole page, so you can read what you wrote. It's
 read-only: there's still no cursor to place. Typing anything (or End)
 snaps back to the end, with the typing line in the centre again.
 

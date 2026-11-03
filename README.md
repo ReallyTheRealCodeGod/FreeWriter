@@ -40,14 +40,16 @@ Your pages, log and settings are kept.
 
    The line under it confirms what you typed, e.g. *25 minutes*. Esc quits.
    Your last goal is suggested in grey: Enter takes it, typing replaces it.
+   You write on a new, blank page, unless you chose an earlier one in the
+   menu (see below).
 2. Write. Text only goes in at the end; Backspace takes back letters typed in
    this session. The line you're typing stays in the middle of the screen, and
    the thin line along the bottom shows how far you've come. No numbers until
    the goal.
-3. When the goal is reached, a note says how many words and minutes. Press Esc
-   to leave, or keep going. The mouse wheel or PageUp/PageDown now scrolls
-   back through the day's page so you can read it; typing (or End) goes back
-   to the end.
+3. When the goal is reached, a note says how many words and minutes. Press
+   Ctrl+S to save the page under a name, Esc to leave, or keep going. The
+   mouse wheel or PageUp/PageDown now scrolls back through the page so you
+   can read it; typing (or End) goes back to the end.
 
 Until then, the window stays in front and won't close, and your other
 monitors are covered with blank paper.
@@ -57,9 +59,17 @@ shortcut: `writer.exe --goal 500` or `writer.exe --goal 25m`.
 
 ## Your pages
 
-One file per day: `Documents\Writing\2026-10-21.txt`. Writing twice in a day
-continues the same file on a new paragraph. The page is saved every few
-seconds, so even a forced exit loses at most a few seconds of writing.
+Each page is a text file in `Documents\Writing`. A new page is saved every
+few seconds from the first word, so even a forced exit loses at most a few
+seconds of writing. Until it has a name, it goes by the time you began it:
+`2026-11-03 14.05.txt`.
+
+Once the goal is reached, **Ctrl+S** saves the page. If it has no name yet,
+it asks for one (`Save as: Short story`), and the page becomes
+`Documents\Writing\Short story.txt`; anything you write after goes into it.
+A name that's already taken is refused, so nothing gets replaced. Leaving
+with Esc asks for a name once if the page hasn't got one; Esc again leaves
+it under its time.
 
 To keep the pages somewhere else, start it with `--pages`, e.g.
 `writer.exe --pages D:\Notes`.
@@ -67,15 +77,16 @@ To keep the pages somewhere else, start it with `--pages`, e.g.
 ### The menu
 
 Before a session, click **Menu** in the top-left corner (or press Tab) to
-see everything you've written: your pages, newest first, and any saved
-copies, with their word counts. Click one (or use Up/Down and Enter) to read
-it on the page. It's read-only; scroll with the mouse wheel, the arrow keys
-or PageUp/PageDown.
+see everything you've written, the page you wrote on last at the top, with
+when and how many words. Click one (or use Up/Down and Enter) to read it.
+It's read-only; scroll with the mouse wheel, the arrow keys or
+PageUp/PageDown.
 
-While reading, **Save a copy** (or Ctrl+S) saves the page under a name you
-type, as `Documents\Writing\Saved\<name>.txt`. Saved copies show up in the
-menu too. **Open the Writing folder** opens it in Explorer. Esc goes back a
-step; the menu is never there during a session.
+While reading, **Write on it** (or Enter) takes you back to the goal line
+with that page chosen: the session carries on at the end of it, on a new
+paragraph. **New page**, next to Menu (or Esc), goes back to a blank page.
+**Open the Writing folder** opens it in Explorer. Esc goes back a step; the
+menu is never there during a session.
 
 ## Someone looking?
 
@@ -95,8 +106,8 @@ row* (a day counts if you reached a goal).
 
 If a session ends without reaching its goal and without the panic sentence
 (Task Manager, a crash, a power cut), the next start that day offers the rest
-of it: *Unfinished from 09:14: 188 words to go. Enter to finish it.* It's
-offered once: take it, or it's simply in the log.
+of it, on the same page: *Unfinished from 09:14: 188 words to go. Enter to
+finish it.* It's offered once: take it, or it's simply in the log.
 
 ## Settings
 

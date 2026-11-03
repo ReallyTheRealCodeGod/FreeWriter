@@ -1,13 +1,16 @@
 # FreeWriter — design
 
-A distraction-free writing app for Windows that works like an old typewriter:
-set a goal, and you're locked onto a blank page until you reach it.
+A distraction-free writing app for Windows and Mac that works like an old
+typewriter: set a goal, and you're locked onto a blank page until you reach
+it.
 
 ## Stack
 
 Rust, with egui/eframe for the window (version pinned in `Cargo.toml`).
-Windows only. Rust toolchain: the GNU host (`x86_64-pc-windows-gnu`), which
-needs no admin rights and no Visual Studio.
+Made for Windows first; the Mac version is the same app with a gentler
+lock (see [on a Mac](#on-a-mac)). Rust toolchain on Windows: the GNU host
+(`x86_64-pc-windows-gnu`) is enough, with no admin rights and no Visual
+Studio.
 
 The icon and version details (the name "FreeWriter" in Explorer and Task
 Manager) are built into the exe. `build.rs` writes them as a `.res` file
@@ -18,6 +21,30 @@ time.
 `install.ps1` installs it per user, without admin rights: the exe in
 `%LOCALAPPDATA%\Programs\FreeWriter`, a Start menu shortcut, and an entry under
 Settings > Apps that runs `uninstall.ps1`.
+
+## Installers
+
+For people who don't build it themselves, each release has two downloads,
+linked at the top of the README:
+
+- **FreeWriter-Setup.exe** (Inno Setup): a two-click wizard that installs for
+  the current user only, so it needs no administrator password, into the
+  same folder as `install.ps1`, which it takes over from. Start menu entry,
+  an optional desktop shortcut, an entry in Settings > Apps, and "Start
+  FreeWriter" at the end.
+- **FreeWriter.dmg**: FreeWriter.app for Apple silicon and Intel in one, and
+  a shortcut to Applications to drag it to.
+
+Neither is signed with a paid certificate, so Windows SmartScreen and macOS
+Gatekeeper warn the first time; the README and the release notes say in
+plain words how to get past that. Signing can be added to the build later
+without changing anything else.
+
+GitHub Actions builds both on every push, on its own Windows and Mac
+machines, after running the tests on each, and installs and uninstalls the
+Windows one to check it. A tag `vX.Y.Z` matching the version in `Cargo.toml`
+publishes them as a release. Download links point at
+`releases/latest/download/`, so they always give the newest version.
 
 ## Flow
 
@@ -45,6 +72,22 @@ Time goals are wall-clock minutes.
 - If the window loses focus, it takes focus back.
 - Ctrl+Alt+Del can't be blocked and is always the real-world emergency exit.
   The app must not fight Task Manager for focus.
+
+### On a Mac
+
+The lock is gentler, because there's nothing like stepping aside for Task
+Manager yet, and it must never get between you and Force Quit:
+
+- Full screen, on top, and closing is refused, as on Windows.
+- It doesn't take focus back: Cmd+Tab and Force Quit (Cmd+Option+Esc) work.
+- No covers on other screens (the monitors aren't counted on a Mac yet).
+- Saving is Cmd+S; the log and settings live in
+  `~/Library/Application Support/FreeWriter`.
+- No onlooker terminal: Ctrl+Space switches input sources on a Mac, and the
+  key is left alone.
+
+It fails open: anything not yet known to work on a Mac leaves the way out
+free rather than holding harder. It hasn't been tried on a real Mac yet.
 
 ## Escape hatch
 

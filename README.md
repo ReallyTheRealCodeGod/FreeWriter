@@ -1,41 +1,28 @@
 # FreeWriter
 
-A distraction-free writing app for Windows that works like an old typewriter.
-Set a goal, and the page holds you until you reach it. Why it works the way it
-does is in [DESIGN.md](DESIGN.md).
+A distraction-free writing app for Windows and Mac that works like an old
+typewriter. Set a goal, and the page holds you until you reach it. Why it
+works the way it does is in [DESIGN.md](DESIGN.md).
 
-## Build
+## Download
 
-Needs Rust (the GNU toolchain is fine; no Visual Studio needed).
+- **Windows:** [FreeWriter-Setup.exe](https://github.com/ReallyTheRealCodeGod/FreeWriter/releases/latest/download/FreeWriter-Setup.exe).
+  Open it, click **Install**, then **Finish**.
+- **Mac** (new, not yet tried much): [FreeWriter.dmg](https://github.com/ReallyTheRealCodeGod/FreeWriter/releases/latest/download/FreeWriter.dmg).
+  Open it and drag FreeWriter onto Applications.
 
-```powershell
-cargo build --release
-```
+The first time, Windows or macOS warns about it, because FreeWriter isn't
+signed with a paid certificate:
 
-The app is `target\release\freewriter.exe`, a single file with its icon built in
-(from `assets\freewriter.ico`, by `build.rs`).
+- **Windows** says "Windows protected your PC": click **More info**, then
+  **Run anyway**. If your browser says the file isn't commonly downloaded,
+  choose **Keep**.
+- **Mac** won't open it: close the message, then open System Settings →
+  Privacy & Security, scroll down to "FreeWriter was blocked" and click
+  **Open Anyway**.
 
-## Install
-
-```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1
-```
-
-This builds the release and installs it for you alone (no admin rights):
-`freewriter.exe` goes in `%LOCALAPPDATA%\Programs\FreeWriter`, FreeWriter
-appears in the Start menu and in Windows search, and it's listed under
-Settings > Apps. Add `-Desktop` for a desktop shortcut too, or `-NoBuild` to
-install the release that's already built. Run it again after changes to
-update.
-
-The app used to be called Writer. Installing FreeWriter takes the old Writer
-install away, and the first start moves its log and settings from
-`%APPDATA%\writer` to `%APPDATA%\FreeWriter`.
-
-To pin it, right-click FreeWriter in the Start menu and choose *Pin to taskbar*.
-
-To remove it, uninstall FreeWriter from Settings > Apps, or run `uninstall.ps1`.
-Your pages, log and settings are kept.
+Needs Windows 10 or 11 (64-bit), or macOS 11 or later. Every version is on
+the [releases page](https://github.com/ReallyTheRealCodeGod/FreeWriter/releases).
 
 ## Writing
 
@@ -133,12 +120,74 @@ backspace = false   # a pure typewriter: Backspace doesn't erase
   during a session asks you to type a long sentence; typing it exactly and
   pressing Enter lets you leave.
 
+## On a Mac
+
+It works the same, with these differences:
+
+- Saving is **Cmd+S**.
+- The log and settings are in `~/Library/Application Support/FreeWriter`.
+  Pages are in `Documents/Writing`, as on Windows; macOS asks once whether
+  FreeWriter may use the Documents folder.
+- The lock is gentler: the page is full screen and on top and won't close,
+  but it doesn't pull itself back to the front, and your other screens
+  aren't covered. **Force Quit** (Cmd+Option+Esc) is the emergency exit.
+- There's no Ctrl+Space terminal (on a Mac, Ctrl+Space switches keyboard
+  input sources).
+
 ## Limits
 
 - The page goes on the primary monitor and the others get blank covers. If a
   monitor is plugged in or out during a session, the covers are taken away
   rather than risk one covering the page.
 - Win+L still locks the computer, and Ctrl+Alt+Del can't be blocked (on purpose).
+
+## Building it yourself
+
+Needs Rust (on Windows the GNU toolchain is fine; no Visual Studio needed).
+
+```powershell
+cargo build --release
+```
+
+The app is `target\release\freewriter.exe`, a single file with its icon built in
+(from `assets\freewriter.ico`, by `build.rs`).
+
+### Installing your own build on Windows
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+This builds the release and installs it for you alone (no admin rights):
+`freewriter.exe` goes in `%LOCALAPPDATA%\Programs\FreeWriter`, FreeWriter
+appears in the Start menu and in Windows search, and it's listed under
+Settings > Apps. Add `-Desktop` for a desktop shortcut too, or `-NoBuild` to
+install the release that's already built. Run it again after changes to
+update; that works on a copy installed with FreeWriter-Setup.exe too.
+
+The app used to be called Writer. Installing FreeWriter takes the old Writer
+install away, and the first start moves its log and settings from
+`%APPDATA%\writer` to `%APPDATA%\FreeWriter`.
+
+To pin it, right-click FreeWriter in the Start menu and choose *Pin to taskbar*.
+
+To remove it, uninstall FreeWriter from Settings > Apps, or run `uninstall.ps1`.
+Your pages, log and settings are kept.
+
+### The installers
+
+GitHub builds them ([.github/workflows/build.yml](.github/workflows/build.yml)):
+every push runs the tests on Windows and on a Mac and makes both installers,
+and the Windows one is installed and uninstalled again to check it. Pushing a
+version tag that matches `Cargo.toml` (e.g. `v1.0.0`) also publishes them as
+a release, with [installer/release-notes.md](installer/release-notes.md) as
+its text.
+
+- **Windows:** [installer/windows/freewriter.iss](installer/windows/freewriter.iss),
+  for Inno Setup 6: `ISCC.exe /DAppVersion=1.0.0 installer\windows\freewriter.iss`
+  after a release build makes `target\installer\FreeWriter-Setup.exe`.
+- **Mac:** `sh installer/macos/build-dmg.sh` on a Mac makes
+  `target/macos/FreeWriter.dmg`, for both Apple silicon and Intel.
 
 ## Development
 

@@ -76,12 +76,10 @@ fn show_error(message: &str) {
     eprintln!("{message}");
 }
 
-/// Uses Courier New from the Windows fonts folder. If it isn't there, egui's
+/// Uses Courier New from the system's fonts. If it isn't there, egui's
 /// built-in monospace font is used instead.
 fn load_typewriter_font(ctx: &egui::Context) {
-    let windows = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());
-    let path = std::path::Path::new(&windows).join("Fonts").join("cour.ttf");
-    let Ok(bytes) = std::fs::read(path) else { return };
+    let Some(bytes) = courier_new() else { return };
     ctx.add_font(egui::FontInsert::new(
         "Courier New",
         egui::FontData::from_owned(bytes),
@@ -90,4 +88,18 @@ fn load_typewriter_font(ctx: &egui::Context) {
             priority: egui::FontPriority::Highest,
         }],
     ));
+}
+
+#[cfg(windows)]
+fn courier_new() -> Option<Vec<u8>> {
+    let windows = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());
+    std::fs::read(std::path::Path::new(&windows).join("Fonts").join("cour.ttf")).ok()
+}
+
+/// macOS keeps it with the fonts that come with the system but aren't its own.
+#[cfg(not(windows))]
+fn courier_new() -> Option<Vec<u8>> {
+    ["/System/Library/Fonts/Supplemental/Courier New.ttf", "/Library/Fonts/Courier New.ttf"]
+        .into_iter()
+        .find_map(|path| std::fs::read(path).ok())
 }

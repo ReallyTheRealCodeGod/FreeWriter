@@ -1,6 +1,6 @@
 [package]
 name = "freewriter"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 description = "A distraction-free writing app that locks you onto the page until you reach your goal."
 publish = false

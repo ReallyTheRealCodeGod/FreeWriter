@@ -46,6 +46,11 @@ pub fn task_manager_in_front() -> bool {
     false
 }
 
+/// Whether a locked session takes focus back when it loses it. Only where
+/// the way out can be told apart (Task Manager, on Windows): on a Mac,
+/// pulling the page back to the front could get in the way of Force Quit.
+pub const TAKES_FOCUS_BACK: bool = cfg!(windows);
+
 /// The monitors: how many, and which is the primary one, where the page goes.
 /// They're numbered in the order Windows lists them, the same order egui's
 /// `ViewportBuilder::with_monitor` counts in.

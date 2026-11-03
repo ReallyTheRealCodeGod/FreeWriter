@@ -1,0 +1,112 @@
+name: Build
+
+# Every push is tested and turned into installers on Windows and on a Mac. A
+# version tag like v1.0.0 also publishes them as a release.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test
+      - name: Build
+        run: cargo build --release
+      - name: Make FreeWriter-Setup.exe
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          & $iscc /Q "/DAppVersion=$version" installer\windows\freewriter.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed.' }
+      - name: Install it and uninstall it again
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $folder = Join-Path $env:LOCALAPPDATA 'Programs\FreeWriter'
+          $exe = Join-Path $folder 'freewriter.exe'
+          $link = Join-Path ([Environment]::GetFolderPath('Programs')) 'FreeWriter.lnk'
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{CCBDDFE6-4128-4C4C-973C-181E731FF6F6}_is1'
+          $quiet = '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+
+          Start-Process target\installer\FreeWriter-Setup.exe -ArgumentList $quiet -Wait
+          foreach ($path in $exe, $link) {
+              if (-not (Test-Path $path)) { throw "Not there after installing: $path" }
+          }
+          if (-not (Test-Path -LiteralPath $key)) { throw 'Not in Settings > Apps after installing.' }
+          Write-Host "Installed: $((Get-ItemProperty -LiteralPath $key).DisplayName) $((Get-Item $exe).VersionInfo.ProductVersion)"
+
+          Start-Process (Join-Path $folder 'unins000.exe') -ArgumentList $quiet -Wait
+          # The uninstaller hands over to a copy of itself, which may still be at work.
+          for ($i = 0; $i -lt 60 -and ((Test-Path $exe) -or (Test-Path -LiteralPath $key)); $i++) { Start-Sleep 1 }
+          foreach ($path in $exe, $link) {
+              if (Test-Path $path) { throw "Still there after uninstalling: $path" }
+          }
+          if (Test-Path -LiteralPath $key) { throw 'Still in Settings > Apps after uninstalling.' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: target/installer/FreeWriter-Setup.exe
+          if-no-files-found: error
+
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test
+      - name: Make FreeWriter.dmg
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          sh installer/macos/build-dmg.sh
+      - name: Look inside it
+        run: |
+          hdiutil attach target/macos/FreeWriter.dmg -mountpoint /tmp/FreeWriter -nobrowse
+          app=/tmp/FreeWriter/FreeWriter.app
+          test -L /tmp/FreeWriter/Applications
+          plutil -lint "$app/Contents/Info.plist"
+          lipo "$app/Contents/MacOS/freewriter" -verify_arch arm64 x86_64
+          test -s "$app/Contents/Resources/FreeWriter.icns"
+          codesign --verify --deep --strict "$app"
+          hdiutil detach /tmp/FreeWriter
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: target/macos/FreeWriter.dmg
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "The tag $GITHUB_REF_NAME doesn't match the version in Cargo.toml ($version)."
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/FreeWriter-Setup.exe dist/FreeWriter.dmg \
+            --title "FreeWriter $version" --notes-file installer/release-notes.md

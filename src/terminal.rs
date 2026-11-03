@@ -46,6 +46,10 @@ const SCROLLBACK: usize = 1000;
 /// The font family the terminal is drawn in.
 const FAMILY: &str = "terminal";
 
+/// Whether Ctrl+Space brings the terminal up. Not on a Mac, where the key
+/// switches keyboard input sources.
+pub const OFFERED: bool = cfg!(not(target_os = "macos"));
+
 /// The window title Windows Terminal shows for the profile.
 pub const TITLE: &str = "Ubuntu";
 /// The colour behind everything while the terminal shows.

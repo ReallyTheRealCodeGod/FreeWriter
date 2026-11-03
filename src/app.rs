@@ -44,6 +44,10 @@ const LOCK_TICK: Duration = Duration::from_millis(250);
 /// Typing this exactly ends a session early, if `panic_exit` is on.
 const PANIC_SENTENCE: &str = "I choose to stop writing now, before I have reached my goal.";
 
+/// The save key as people know it: Ctrl+S, or Cmd+S on a Mac (egui's
+/// `command` modifier is whichever of the two the system uses).
+const SAVE_KEY: &str = if cfg!(target_os = "macos") { "Cmd+S" } else { "Ctrl+S" };
+
 /// How long a page's name can be, in characters.
 const NAME_CHARS: usize = 60;
 /// How long "Saved as ..." stays at the bottom.
@@ -62,6 +66,9 @@ pub struct WriterApp {
     level: WindowLevel,
     /// Whether Task Manager is in front. A field so tests can stand in for it.
     task_manager_in_front: fn() -> bool,
+    /// Whether the lock takes focus back (see `lock::TAKES_FOCUS_BACK`); a
+    /// field so tests can try both.
+    take_focus: bool,
     /// The monitors as they are now; a field for tests, like the one above.
     monitors: fn() -> Monitors,
     /// The monitors as they were at the start, when the page went on the
@@ -326,6 +333,7 @@ impl WriterApp {
             screen,
             level: WindowLevel::Normal,
             task_manager_in_front: lock::task_manager_in_front,
+            take_focus: lock::TAKES_FOCUS_BACK,
             monitors: lock::monitors,
             placed: lock::monitors(),
             terminal: Terminal::here(),
@@ -403,6 +411,9 @@ impl WriterApp {
             return;
         }
         self.set_level(ctx, WindowLevel::AlwaysOnTop);
+        if !self.take_focus {
+            return;
+        }
         if minimized == Some(true) {
             ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
         }
@@ -516,7 +527,7 @@ impl WriterApp {
         }
         let on = match &start.page {
             Some(page) => format!("Writing on {} ({}). Esc for a new page.", page.name, menu::words(page.words)),
-            None => "A new page. Once you reach your goal, Ctrl+S gives it a name.".to_owned(),
+            None => format!("A new page. Once you reach your goal, {SAVE_KEY} gives it a name."),
         };
         painter.text(bottom, Align2::CENTER_BOTTOM, on, note, FAINT);
     }
@@ -683,7 +694,7 @@ impl WriterApp {
         } else if session.reached {
             let tally = tally(session.page.session_words(), session.elapsed());
             let done = if page::is_unnamed(session.page.path()) {
-                format!("Goal reached: {tally}. Ctrl+S names it. Esc to leave, or keep writing.")
+                format!("Goal reached: {tally}. {SAVE_KEY} names it. Esc to leave, or keep writing.")
             } else {
                 format!("Goal reached: {tally}. Esc to leave, or keep writing.")
             };
@@ -724,7 +735,7 @@ fn stem(path: &Path) -> String {
 fn short_path(path: &Path) -> String {
     let file = path.file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
     match path.parent().and_then(Path::file_name) {
-        Some(folder) => format!("{}\\{file}", folder.to_string_lossy()),
+        Some(folder) => format!("{}{}{file}", folder.to_string_lossy(), std::path::MAIN_SEPARATOR),
         None => file.into_owned(),
     }
 }
@@ -778,10 +789,12 @@ impl eframe::App for WriterApp {
     /// Typing and drawing. Keystrokes are only read here: `logic` sees stale
     /// events while the window is hidden.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.terminal.load_font(ui.ctx());
         let mut events = ui.input(|i| i.events.clone());
-        if take_switch(&mut events) {
-            self.switch_terminal(ui.ctx());
+        if terminal::OFFERED {
+            self.terminal.load_font(ui.ctx());
+            if take_switch(&mut events) {
+                self.switch_terminal(ui.ctx());
+            }
         }
         // Behind the terminal, the screens hear nothing: no typing, no Esc.
         if self.terminal.shown() {
@@ -889,6 +902,7 @@ mod tests {
         let mut harness = Harness::builder()
             .build_eframe(move |_| WriterApp::new(settings, false, app_pages.clone(), Some(log_of(&app_pages)), Some(goal)));
         harness.state_mut().task_manager_in_front = || false;
+        harness.state_mut().take_focus = true;
         harness.state_mut().monitors = one_monitor;
         harness.state_mut().placed = one_monitor();
         (harness, pages)
@@ -990,6 +1004,20 @@ mod tests {
         assert_eq!(logged.len(), 1);
         assert_eq!((logged[0].goal, logged[0].words, logged[0].outcome), (Goal::Time(2), 4, Outcome::Reached));
         assert!(log_of(&pages).recover().is_none(), "leaving properly ends the running line");
+        let _ = std::fs::remove_dir_all(&pages);
+    }
+
+    #[test]
+    fn where_focus_isnt_taken_back_the_lock_still_holds_the_page() {
+        use ViewportCommand::{CancelClose, Focus, Minimized};
+        let (mut h, pages) = locked_session("gentle", Settings::default(), "100");
+        h.state_mut().take_focus = false;
+        frame(&mut h, Some(true), false, false, None);
+        assert_eq!(h.state().level, WindowLevel::AlwaysOnTop);
+        assert!(frame(&mut h, Some(true), false, true, None).contains(&CancelClose));
+        for commands in [frame(&mut h, Some(false), false, false, None), frame(&mut h, Some(false), true, false, None)] {
+            assert!(!commands.contains(&Focus) && !commands.contains(&Minimized(false)), "{commands:?}");
+        }
         let _ = std::fs::remove_dir_all(&pages);
     }
 
@@ -1411,6 +1439,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(target_os = "macos", ignore = "no terminal on a Mac")]
     fn ctrl_space_puts_the_terminal_over_the_start_screen() {
         let pages = scratch("terminal-start");
         let mut h = start_screen(&pages);
@@ -1440,6 +1469,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(target_os = "macos", ignore = "no terminal on a Mac")]
     fn the_lock_holds_behind_the_terminal() {
         let (mut h, pages) = locked_session("terminal-lock", Settings::default(), "100");
         h.state_mut().monitors = three_monitors;

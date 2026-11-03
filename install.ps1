@@ -5,8 +5,9 @@ Installs FreeWriter for the current user, no admin rights needed:
 - adds FreeWriter to the Start menu (and to the desktop with -Desktop)
 - lists it under Settings > Apps, where it can be uninstalled
 
-Run it again to update an installed FreeWriter. An install from when the app
-was called Writer is taken away.
+Run it again to update an installed FreeWriter, including one installed with
+FreeWriter-Setup.exe (then only the program is replaced). An install from
+when the app was called Writer is taken away.
 
     powershell -ExecutionPolicy Bypass -File install.ps1 [-Desktop] [-NoBuild]
 #>
@@ -50,6 +51,15 @@ foreach ($link in (Join-Path ([Environment]::GetFolderPath('Programs')) 'Writer.
 $oldKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Writer'
 if (Test-Path $oldKey) { Remove-Item $oldKey -Recurse -Force }
 if (Test-Path $oldFolder) { Remove-Item $oldFolder -Recurse -Force }
+
+# Installed with FreeWriter-Setup.exe: its shortcuts and its entry in
+# Settings > Apps stay as they are, and only the program is updated.
+$setupKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{CCBDDFE6-4128-4C4C-973C-181E731FF6F6}_is1'
+if (Test-Path -LiteralPath $setupKey) {
+    Copy-Item $source $exe -Force
+    Write-Host "FreeWriter in $folder is updated."
+    return
+}
 
 New-Item -ItemType Directory -Force $folder | Out-Null
 Copy-Item $source $exe -Force

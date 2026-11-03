@@ -15,6 +15,7 @@ use crate::logbook::{self, Entry, Logbook, Outcome};
 use crate::menu::{self, Menu};
 use crate::page::{self, Page};
 use crate::settings::Settings;
+use crate::terminal::{self, Terminal};
 
 const PAPER: Color32 = Color32::WHITE;
 pub const INK: Color32 = Color32::from_rgb(0x1a, 0x1a, 0x1a);
@@ -58,6 +59,8 @@ pub struct WriterApp {
     /// The monitors as they were at the start, when the page went on the
     /// primary one.
     placed: Monitors,
+    /// The terminal Ctrl+Space puts over everything, for onlookers.
+    terminal: Terminal,
 }
 
 enum Screen {
@@ -100,6 +103,10 @@ struct Session {
     logbook: Option<Logbook>,
     /// Set once the session's line is in the log.
     logged: bool,
+    /// Since when the terminal has been up, if it is.
+    hidden_since: Option<Instant>,
+    /// Time spent behind the terminal before that.
+    hidden_for: Duration,
 }
 
 impl Session {
@@ -118,6 +125,29 @@ impl Session {
             scroll: 0.0,
             logbook,
             logged: false,
+            hidden_since: None,
+            hidden_for: Duration::ZERO,
+        }
+    }
+
+    /// Time spent on the session, leaving out the time behind the terminal.
+    fn elapsed(&self) -> Duration {
+        self.elapsed_at(Instant::now())
+    }
+
+    fn elapsed_at(&self, now: Instant) -> Duration {
+        let hidden = self.hidden_for + self.hidden_since.map_or(Duration::ZERO, |since| now.saturating_duration_since(since));
+        now.saturating_duration_since(self.started).saturating_sub(hidden)
+    }
+
+    fn set_hidden(&mut self, hidden: bool, now: Instant) {
+        match (hidden, self.hidden_since) {
+            (true, None) => self.hidden_since = Some(now),
+            (false, Some(since)) => {
+                self.hidden_for += now.saturating_duration_since(since);
+                self.hidden_since = None;
+            }
+            _ => {}
         }
     }
 
@@ -136,7 +166,7 @@ impl Session {
             start: NaiveTime::from_hms_opt(time.hour(), time.minute(), 0).unwrap_or(time),
             goal: self.goal,
             words: self.page.session_words(),
-            minutes: self.started.elapsed().as_secs() / 60,
+            minutes: self.elapsed().as_secs() / 60,
             outcome,
         }
     }
@@ -156,7 +186,7 @@ impl Session {
         if self.reached {
             1.0
         } else {
-            self.goal.progress(self.page.session_words(), self.started.elapsed())
+            self.goal.progress(self.page.session_words(), self.elapsed())
         }
     }
 
@@ -233,7 +263,20 @@ impl WriterApp {
             task_manager_in_front: lock::task_manager_in_front,
             monitors: lock::monitors,
             placed: lock::monitors(),
+            terminal: Terminal::here(),
         }
+    }
+
+    /// Ctrl+Space: the terminal over everything, or back to what was there.
+    fn switch_terminal(&mut self, ctx: &egui::Context) {
+        self.terminal.switch();
+        let shown = self.terminal.shown();
+        if let Screen::Writing(session) = &mut self.screen {
+            session.set_hidden(shown, Instant::now());
+        }
+        let title = if shown { terminal::TITLE } else { "Writer" };
+        ctx.send_viewport_cmd(ViewportCommand::Title(title.to_owned()));
+        ctx.request_repaint();
     }
 
     /// The blank windows on the other monitors during a locked session, one
@@ -249,8 +292,9 @@ impl WriterApp {
         self.placed
             .others()
             .map(|index| {
+                let title = if self.terminal.shown() { terminal::TITLE } else { "Writer" };
                 let mut builder = egui::ViewportBuilder::default()
-                    .with_title("Writer")
+                    .with_title(title)
                     .with_monitor(index)
                     .with_decorations(false)
                     .with_taskbar(false)
@@ -492,7 +536,7 @@ impl WriterApp {
             let reading = "Reading back. Type, or press End, to return to the end.";
             painter.text(bottom, Align2::CENTER_BOTTOM, reading, note, FAINT);
         } else if session.reached {
-            let tally = tally(session.page.session_words(), session.started.elapsed());
+            let tally = tally(session.page.session_words(), session.elapsed());
             let done = format!("Goal reached: {tally}. Esc to leave, or keep writing.");
             painter.text(bottom, Align2::CENTER_BOTTOM, done, note, FAINT);
         }
@@ -519,6 +563,20 @@ fn tally(words: usize, elapsed: Duration) -> String {
         1 => format!("{words} in 1 minute"),
         minutes => format!("{words} in {minutes} minutes"),
     }
+}
+
+/// Takes Ctrl+Space out of the events: true if it was pressed (held down,
+/// it repeats, and those don't count).
+fn take_switch(events: &mut Vec<Event>) -> bool {
+    let mut pressed = false;
+    events.retain(|event| match event {
+        Event::Key { key: Key::Space, pressed: down, repeat, modifiers, .. } if modifiers.ctrl && !modifiers.alt => {
+            pressed ^= *down && !*repeat;
+            false
+        }
+        _ => true,
+    });
+    pressed
 }
 
 /// Adds typed text to a short input line, up to `max_chars` characters.
@@ -556,22 +614,38 @@ impl eframe::App for WriterApp {
     /// Typing and drawing. Keystrokes are only read here: `logic` sees stale
     /// events while the window is hidden.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // The pointer is for the start screen and its menu; writing has none.
-        if matches!(self.screen, Screen::Writing(_)) {
-            ui.ctx().set_cursor_icon(CursorIcon::None);
+        self.terminal.load_font(ui.ctx());
+        let mut events = ui.input(|i| i.events.clone());
+        if take_switch(&mut events) {
+            self.switch_terminal(ui.ctx());
         }
-        ui.painter().rect_filled(ui.max_rect(), 0.0, PAPER);
-        let events = ui.input(|i| i.events.clone());
-        match self.screen {
-            Screen::Start(_) => self.start_screen(ui, &events),
-            Screen::Writing(_) => self.writing_screen(ui, &events),
+        // Behind the terminal, the screens hear nothing: no typing, no Esc.
+        if self.terminal.shown() {
+            self.terminal.tick(Instant::now());
+            self.terminal.show(ui);
+        } else {
+            // The pointer is for the start screen and its menu; writing has none.
+            if matches!(self.screen, Screen::Writing(_)) {
+                ui.ctx().set_cursor_icon(CursorIcon::None);
+            }
+            ui.painter().rect_filled(ui.max_rect(), 0.0, PAPER);
+            match self.screen {
+                Screen::Start(_) => self.start_screen(ui, &events),
+                Screen::Writing(_) => self.writing_screen(ui, &events),
+            }
         }
         // Covers live as long as they're shown each frame; once the session
         // is no longer locked, they close.
-        for (id, builder) in self.covers() {
+        for (nth, (id, builder)) in self.covers().into_iter().enumerate() {
+            let monitor = builder.monitor.unwrap_or(nth);
+            let terminal = &mut self.terminal;
             ui.ctx().show_viewport_immediate(id, builder, |ui, _| {
-                ui.ctx().set_cursor_icon(CursorIcon::None);
-                ui.painter().rect_filled(ui.max_rect(), 0.0, PAPER);
+                if terminal.shown() {
+                    terminal.show_cover(ui, monitor, nth);
+                } else {
+                    ui.ctx().set_cursor_icon(CursorIcon::None);
+                    ui.painter().rect_filled(ui.max_rect(), 0.0, PAPER);
+                }
                 if ui.input(|i| i.viewport().close_requested()) {
                     ui.ctx().send_viewport_cmd(ViewportCommand::CancelClose);
                 }
@@ -591,7 +665,8 @@ impl eframe::App for WriterApp {
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        PAPER.to_normalized_gamma_f32()
+        let colour = if self.terminal.shown() { terminal::CLEAR } else { PAPER };
+        colour.to_normalized_gamma_f32()
     }
 }
 
@@ -1030,6 +1105,96 @@ mod tests {
         h.run_steps(2);
         assert_eq!(OPENED.lock().unwrap().as_deref(), Some(pages.as_path()));
         let _ = std::fs::remove_dir_all(&pages);
+    }
+
+    fn ctrl_space(pressed: bool) -> Option<Event> {
+        Some(Event::Key { key: Key::Space, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::CTRL })
+    }
+
+    /// Ctrl+Space pressed and let go. Returns the commands from the press.
+    fn switch(harness: &mut Harness<'_, WriterApp>) -> Vec<ViewportCommand> {
+        let commands = frame(harness, Some(true), false, false, ctrl_space(true));
+        frame(harness, Some(true), false, false, ctrl_space(false));
+        commands
+    }
+
+    #[test]
+    fn ctrl_space_puts_the_terminal_over_the_start_screen() {
+        let pages = scratch("terminal-start");
+        let mut h = start_screen(&pages);
+        h.event(Event::Text("50".to_owned()));
+        h.step();
+        let commands = switch(&mut h);
+        assert!(h.state().terminal.shown());
+        assert!(commands.contains(&ViewportCommand::Title("Ubuntu".to_owned())));
+
+        // Nothing gets through: no typing, no menu, and Esc doesn't quit.
+        for key in [Key::Backspace, Key::Tab, Key::Enter, Key::Escape] {
+            frame(&mut h, Some(true), false, false, Some(Event::Text("99".to_owned())));
+            assert!(!frame(&mut h, Some(true), false, false, press(key)).contains(&ViewportCommand::Close));
+        }
+
+        // Held down, the key repeats; it switches once all the same.
+        let commands = frame(&mut h, Some(true), false, false, ctrl_space(true));
+        for _ in 0..3 {
+            frame(&mut h, Some(true), false, false, ctrl_space(true));
+        }
+        frame(&mut h, Some(true), false, false, ctrl_space(false));
+        assert!(!h.state().terminal.shown());
+        assert!(commands.contains(&ViewportCommand::Title("Writer".to_owned())));
+        let Screen::Start(start) = &h.state().screen else { panic!("not the start screen") };
+        assert_eq!((start.input.as_str(), start.menu.is_none()), ("50", true), "as it was left");
+        let _ = std::fs::remove_dir_all(&pages);
+    }
+
+    #[test]
+    fn the_lock_holds_behind_the_terminal() {
+        let (mut h, pages) = locked_session("terminal-lock", Settings::default(), "100");
+        h.state_mut().monitors = three_monitors;
+        h.state_mut().placed = three_monitors();
+        frame(&mut h, Some(true), false, false, Some(Event::Text("Before".to_owned())));
+        switch(&mut h);
+
+        // Still locked: refusing to close, taking focus back, on top.
+        assert!(frame(&mut h, Some(true), false, true, None).contains(&ViewportCommand::CancelClose));
+        assert!(frame(&mut h, Some(false), false, false, None).contains(&ViewportCommand::Focus));
+        assert_eq!(h.state().level, WindowLevel::AlwaysOnTop);
+        // The covers stay up, as terminals: htop and the log.
+        let covers = h.state().covers();
+        assert_eq!(covers.len(), 2);
+        assert!(covers.iter().all(|(_, builder)| builder.title.as_deref() == Some("Ubuntu")));
+
+        // Typing goes nowhere, and the session's clock stands still.
+        frame(&mut h, Some(true), false, false, Some(Event::Text(" hidden".to_owned())));
+        frame(&mut h, Some(true), false, false, press(Key::Escape));
+        let Screen::Writing(session) = &h.state().screen else { panic!("no session") };
+        assert!(session.hidden_since.is_some());
+
+        switch(&mut h);
+        frame(&mut h, Some(true), false, false, Some(Event::Text(" after".to_owned())));
+        let Screen::Writing(session) = &h.state().screen else { panic!("no session") };
+        assert_eq!(session.page.tail(100), "Before after");
+        assert!(session.hidden_since.is_none() && session.hidden_for > Duration::ZERO);
+        assert!(h.state().covers().iter().all(|(_, builder)| builder.title.as_deref() == Some("Writer")));
+        let _ = std::fs::remove_dir_all(&pages);
+    }
+
+    #[test]
+    fn time_behind_the_terminal_does_not_count() {
+        let pages = scratch("terminal-time");
+        let page = Page::open(page::today_file(&pages)).unwrap();
+        let mut session = Session::new(page, Goal::Time(25 * 60), None);
+        let start = session.started;
+        let at = |seconds| start + Duration::from_secs(seconds);
+        session.set_hidden(true, at(10));
+        assert_eq!(session.elapsed_at(at(40)), Duration::from_secs(10), "stopped while hidden");
+        session.set_hidden(false, at(70));
+        session.set_hidden(false, at(80));
+        assert_eq!(session.elapsed_at(at(100)), Duration::from_secs(40));
+        session.set_hidden(true, at(100));
+        session.set_hidden(true, at(110));
+        session.set_hidden(false, at(120));
+        assert_eq!(session.elapsed_at(at(130)), Duration::from_secs(50));
     }
 
     #[test]

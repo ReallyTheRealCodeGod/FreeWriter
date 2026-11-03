@@ -77,6 +77,14 @@ type, as `Documents\Writing\Saved\<name>.txt`. Saved copies show up in the
 menu too. **Open the Writing folder** opens it in Explorer. Esc goes back a
 step; the menu is never there during a session.
 
+## Someone looking?
+
+Press **Ctrl+Space** and the screen turns into an Ubuntu terminal under
+Windows Terminal, installing and updating packages by itself. While a
+session is locked, your other monitors show `htop` and `journalctl -f`. Press
+Ctrl+Space again to come back to exactly where you were. Nothing you type
+in between goes anywhere, and the time doesn't count towards a time goal.
+
 ## Your log
 
 Every session gets a line in `%APPDATA%\writer\log.tsv`: date, start time,
@@ -122,5 +130,5 @@ backspace = false   # a pure typewriter: Backspace doesn't erase
 - `writer.exe --goal 15s` locks for just 15 seconds: a quick way to try the
   lock itself (goals also accept seconds).
 - `cargo test` runs the unit tests.
-- `cargo test -- --ignored screenshots` renders the screens to
-  `target\screenshots` (needs a graphics card).
+- `cargo test -- --ignored screenshots` renders the screens, the terminal's
+  too, to `target\screenshots` (needs a graphics card).

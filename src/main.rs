@@ -11,6 +11,7 @@ mod logbook;
 mod menu;
 mod page;
 mod settings;
+mod terminal;
 
 use eframe::egui;
 

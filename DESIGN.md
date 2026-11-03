@@ -125,6 +125,44 @@ mouse.
 - Esc from the list goes back to the start line, with whatever goal you'd
   typed still there.
 
+## Onlookers (Ctrl+Space)
+
+For when someone walks up and the page is nobody's business. Ctrl+Space
+swaps the screen for an Ubuntu terminal under Windows Terminal, busy with
+routine admin work; Ctrl+Space again brings back exactly what was there.
+It works on every screen: the start line, the menu and a session.
+
+- **The look** is the WSL Ubuntu profile as Windows Terminal draws it,
+  full screen: the Ubuntu colour scheme (aubergine `#300A24`, white text),
+  Ubuntu Mono at 13 pt, 8 px padding, a white block cursor that blinks when
+  nothing is printing. The prompt is the usual Ubuntu one,
+  `user@HOST:~$` in green and blue, with the Windows user name in lower
+  case and the computer's name, which is what WSL shows. The window's title
+  becomes `Ubuntu`, so Alt+Tab agrees. The pointer shows, as an I-beam.
+- **The main screen** runs `apt` by itself, nothing to type: `apt update`,
+  `apt upgrade`, then installing build tools, Redis, fail2ban and the
+  Prometheus node exporter, with a quick `systemctl status` or `df -h` in
+  between, and idle pauses at the prompt. The output follows Ubuntu 24.04:
+  `Get:` lines, the download status line, `Unpacking`/`Setting up`, the
+  green `Progress: [ 37%]` bar along the bottom while dpkg runs, and
+  needrestart's report at the end. After the first round it purges what it
+  installed and installs it again, as when testing a setup script, and
+  `apt update` finds nothing new.
+- **The other monitors**, during a locked session, show a terminal each
+  instead of blank paper: `htop` on the first (the real number of cores,
+  updating every 1.5 seconds, sorted by CPU) and `journalctl -f` on the
+  second, with log lines stamped with the real time. More monitors
+  alternate the two.
+- **Time stands still underneath.** The terminal only runs while it's
+  showing, and continues where it left off next time. Keys other than
+  Ctrl+Space do nothing: nothing reaches the page or the menu, and Esc
+  doesn't quit. A session stays locked, saves as usual, and the time spent
+  behind the terminal doesn't count towards a time goal or the log's
+  minutes.
+- When it first appears, there's already history on screen (`uptime`,
+  `df -h`, `free -h`) and the update under way, as if it had been running
+  for a while.
+
 ## Out of scope
 
 Website/app blocking (that's Cold Turkey *Blocker*), formatting, file picker,

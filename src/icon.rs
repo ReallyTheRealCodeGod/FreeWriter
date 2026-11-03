@@ -2,8 +2,8 @@ use std::sync::{Arc, OnceLock};
 
 use eframe::egui::IconData;
 
-/// The app's icon file; build.rs also puts it in writer.exe for Explorer.
-const ICO: &[u8] = include_bytes!("../assets/writer.ico");
+/// The app's icon file; build.rs also puts it in freewriter.exe for Explorer.
+const ICO: &[u8] = include_bytes!("../assets/freewriter.ico");
 
 /// The icon for the windows (title bar, taskbar, Alt+Tab): the largest image
 /// in the icon file, which is stored as a PNG.

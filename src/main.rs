@@ -1,4 +1,4 @@
-//! Writer: a distraction-free writing app that works like an old typewriter.
+//! FreeWriter: a distraction-free writing app that works like an old typewriter.
 //! Set a goal, and the page holds you until you reach it. See DESIGN.md.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -24,7 +24,7 @@ fn main() {
     // `--pages D:\Notes` keeps the pages somewhere other than Documents\Writing.
     let pages = option(&args, "--pages").map_or_else(page::pages_dir, Into::into);
 
-    let mut viewport = egui::ViewportBuilder::default().with_title("Writer");
+    let mut viewport = egui::ViewportBuilder::default().with_title(app::NAME);
     if let Some(icon) = icon::icon() {
         viewport = viewport.with_icon(icon);
     }
@@ -38,7 +38,7 @@ fn main() {
     let options = eframe::NativeOptions { viewport, ..Default::default() };
 
     let result = eframe::run_native(
-        "Writer",
+        app::NAME,
         options,
         Box::new(move |cc| {
             load_typewriter_font(&cc.egui_ctx);
@@ -48,7 +48,7 @@ fn main() {
         }),
     );
     if let Err(error) = result {
-        show_error(&format!("Writer couldn't start.\n\n{error}"));
+        show_error(&format!("{} couldn't start.\n\n{error}", app::NAME));
     }
 }
 
@@ -66,7 +66,7 @@ fn option(args: &[String], name: &str) -> Option<String> {
 fn show_error(message: &str) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
     let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
-    let (text, title) = (wide(message), wide("Writer"));
+    let (text, title) = (wide(message), wide(app::NAME));
     // SAFETY: both strings are NUL-terminated and outlive the call.
     unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR) };
 }

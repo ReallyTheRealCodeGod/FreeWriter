@@ -17,6 +17,9 @@ use crate::page::{self, Listed, Page};
 use crate::settings::Settings;
 use crate::terminal::{self, Terminal};
 
+/// The app's name, on its windows.
+pub const NAME: &str = "FreeWriter";
+
 const PAPER: Color32 = Color32::WHITE;
 pub const INK: Color32 = Color32::from_rgb(0x1a, 0x1a, 0x1a);
 pub const FAINT: Color32 = Color32::from_rgb(0x9a, 0x9a, 0x9a);
@@ -336,7 +339,7 @@ impl WriterApp {
         if let Screen::Writing(session) = &mut self.screen {
             session.set_hidden(shown, Instant::now());
         }
-        let title = if shown { terminal::TITLE } else { "Writer" };
+        let title = if shown { terminal::TITLE } else { NAME };
         ctx.send_viewport_cmd(ViewportCommand::Title(title.to_owned()));
         ctx.request_repaint();
     }
@@ -354,7 +357,7 @@ impl WriterApp {
         self.placed
             .others()
             .map(|index| {
-                let title = if self.terminal.shown() { terminal::TITLE } else { "Writer" };
+                let title = if self.terminal.shown() { terminal::TITLE } else { NAME };
                 let mut builder = egui::ViewportBuilder::default()
                     .with_title(title)
                     .with_monitor(index)
@@ -1430,7 +1433,7 @@ mod tests {
         }
         frame(&mut h, Some(true), false, false, ctrl_space(false));
         assert!(!h.state().terminal.shown());
-        assert!(commands.contains(&ViewportCommand::Title("Writer".to_owned())));
+        assert!(commands.contains(&ViewportCommand::Title("FreeWriter".to_owned())));
         let Screen::Start(start) = &h.state().screen else { panic!("not the start screen") };
         assert_eq!((start.input.as_str(), start.menu.is_none()), ("50", true), "as it was left");
         let _ = std::fs::remove_dir_all(&pages);
@@ -1464,7 +1467,7 @@ mod tests {
         let Screen::Writing(session) = &h.state().screen else { panic!("no session") };
         assert_eq!(session.page.tail(100), "Before after");
         assert!(session.hidden_since.is_none() && session.hidden_for > Duration::ZERO);
-        assert!(h.state().covers().iter().all(|(_, builder)| builder.title.as_deref() == Some("Writer")));
+        assert!(h.state().covers().iter().all(|(_, builder)| builder.title.as_deref() == Some("FreeWriter")));
         let _ = std::fs::remove_dir_all(&pages);
     }
 

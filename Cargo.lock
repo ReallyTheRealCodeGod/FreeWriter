@@ -1210,6 +1210,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "freewriter"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dirs",
+ "eframe",
+ "egui_kittest",
+ "image",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4229,18 +4241,6 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
-
-[[package]]
-name = "writer"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "dirs",
- "eframe",
- "egui_kittest",
- "image",
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "x11-dl"

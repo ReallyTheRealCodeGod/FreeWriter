@@ -1,4 +1,4 @@
-# Writer
+# FreeWriter
 
 A distraction-free writing app for Windows that works like an old typewriter.
 Set a goal, and the page holds you until you reach it. Why it works the way it
@@ -12,8 +12,8 @@ Needs Rust (the GNU toolchain is fine; no Visual Studio needed).
 cargo build --release
 ```
 
-The app is `target\release\writer.exe`, a single file with its icon built in
-(from `assets\writer.ico`, by `build.rs`).
+The app is `target\release\freewriter.exe`, a single file with its icon built in
+(from `assets\freewriter.ico`, by `build.rs`).
 
 ## Install
 
@@ -22,14 +22,19 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
 This builds the release and installs it for you alone (no admin rights):
-`writer.exe` goes in `%LOCALAPPDATA%\Programs\Writer`, Writer appears in the
-Start menu and in Windows search, and it's listed under Settings > Apps. Add
-`-Desktop` for a desktop shortcut too, or `-NoBuild` to install the release
-that's already built. Run it again after changes to update.
+`freewriter.exe` goes in `%LOCALAPPDATA%\Programs\FreeWriter`, FreeWriter
+appears in the Start menu and in Windows search, and it's listed under
+Settings > Apps. Add `-Desktop` for a desktop shortcut too, or `-NoBuild` to
+install the release that's already built. Run it again after changes to
+update.
 
-To pin it, right-click Writer in the Start menu and choose *Pin to taskbar*.
+The app used to be called Writer. Installing FreeWriter takes the old Writer
+install away, and the first start moves its log and settings from
+`%APPDATA%\writer` to `%APPDATA%\FreeWriter`.
 
-To remove it, uninstall Writer from Settings > Apps, or run `uninstall.ps1`.
+To pin it, right-click FreeWriter in the Start menu and choose *Pin to taskbar*.
+
+To remove it, uninstall FreeWriter from Settings > Apps, or run `uninstall.ps1`.
 Your pages, log and settings are kept.
 
 ## Writing
@@ -55,7 +60,7 @@ Until then, the window stays in front and won't close, and your other
 monitors are covered with blank paper.
 
 To skip the start line, give the goal when starting, e.g. in a desktop
-shortcut: `writer.exe --goal 500` or `writer.exe --goal 25m`.
+shortcut: `freewriter.exe --goal 500` or `freewriter.exe --goal 25m`.
 
 ## Your pages
 
@@ -72,7 +77,7 @@ with Esc asks for a name once if the page hasn't got one; Esc again leaves
 it under its time.
 
 To keep the pages somewhere else, start it with `--pages`, e.g.
-`writer.exe --pages D:\Notes`.
+`freewriter.exe --pages D:\Notes`.
 
 ### The menu
 
@@ -98,7 +103,7 @@ in between goes anywhere, and the time doesn't count towards a time goal.
 
 ## Your log
 
-Every session gets a line in `%APPDATA%\writer\log.tsv`: date, start time,
+Every session gets a line in `%APPDATA%\FreeWriter\log.tsv`: date, start time,
 goal, words, minutes, and how it ended (`reached`, `left early` or
 `unfinished`). It's tab-separated, so it opens in a spreadsheet. The start
 screen shows one quiet line from it, e.g. *Yesterday: 523 words · 4 days in a
@@ -111,7 +116,7 @@ finish it.* It's offered once: take it, or it's simply in the log.
 
 ## Settings
 
-There's no settings screen. Create `%APPDATA%\writer\settings.toml` with any
+There's no settings screen. Create `%APPDATA%\FreeWriter\settings.toml` with any
 of these lines:
 
 ```toml
@@ -121,7 +126,7 @@ backspace = false   # a pure typewriter: Backspace doesn't erase
 
 ## Getting out early
 
-- **Emergency:** Ctrl+Alt+Del → Task Manager → select Writer → End task. The
+- **Emergency:** Ctrl+Alt+Del → Task Manager → select FreeWriter → End task. The
   app steps aside for Task Manager, on any monitor; your page is already
   saved.
 - **Panic exit (optional):** with `panic_exit = true` in the settings, Esc
@@ -138,7 +143,7 @@ backspace = false   # a pure typewriter: Backspace doesn't erase
 ## Development
 
 - `cargo run -- --windowed` runs in a normal window without the lock.
-- `writer.exe --goal 15s` locks for just 15 seconds: a quick way to try the
+- `freewriter.exe --goal 15s` locks for just 15 seconds: a quick way to try the
   lock itself (goals also accept seconds).
 - `cargo test` runs the unit tests.
 - `cargo test -- --ignored screenshots` renders the screens, the terminal's

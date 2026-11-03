@@ -1,7 +1,7 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-/// Settings from `%APPDATA%\writer\settings.toml`. There's no settings screen;
+/// Settings from `%APPDATA%\FreeWriter\settings.toml`. There's no settings screen;
 /// the file is edited by hand. It understands two lines:
 ///
 /// ```toml
@@ -23,7 +23,16 @@ impl Default for Settings {
 
 /// The folder the settings, the log and the running session live in.
 pub fn dir() -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join("writer"))
+    dirs::config_dir().map(|config| moved_in(&config.join("writer"), config.join("FreeWriter")))
+}
+
+/// `dir`, after moving `old` there if only `old` exists: the app was called
+/// Writer before. If the move fails, `old` stays in use.
+fn moved_in(old: &Path, dir: PathBuf) -> PathBuf {
+    if !dir.exists() && old.is_dir() && fs::rename(old, &dir).is_err() {
+        return old.to_owned();
+    }
+    dir
 }
 
 impl Settings {
@@ -73,5 +82,24 @@ mod tests {
         assert!(!Settings::parse("backspace = false").backspace);
         let both = Settings::parse("panic_exit = true\nbackspace = false\n");
         assert!(both.panic_exit && !both.backspace);
+    }
+
+    #[test]
+    fn the_old_folder_is_moved_once() {
+        let config = std::env::temp_dir().join(format!("writer-config-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&config);
+        let (old, dir) = (config.join("writer"), config.join("FreeWriter"));
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("log.tsv"), "the log").unwrap();
+
+        assert_eq!(moved_in(&old, dir.clone()), dir);
+        assert_eq!(fs::read_to_string(dir.join("log.tsv")).unwrap(), "the log");
+        assert!(!old.exists());
+
+        // An old folder turning up later is left alone.
+        fs::create_dir_all(&old).unwrap();
+        assert_eq!(moved_in(&old, dir.clone()), dir);
+        assert!(old.exists());
+        let _ = fs::remove_dir_all(&config);
     }
 }

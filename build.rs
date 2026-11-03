@@ -1,4 +1,4 @@
-//! On Windows, gives writer.exe its icon and its version details (the name
+//! On Windows, gives freewriter.exe its icon and its version details (the name
 //! Explorer and Task Manager show). The resources are written straight into
 //! a .res file, which both link.exe and lld take as it is, so no resource
 //! compiler is needed.
@@ -7,7 +7,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-const ICON: &str = "assets/writer.ico";
+const ICON: &str = "assets/freewriter.ico";
 
 const RT_ICON: u16 = 3;
 const RT_GROUP_ICON: u16 = 14;
@@ -22,7 +22,7 @@ fn main() {
         return;
     }
     let icon = fs::read(ICON).unwrap_or_else(|e| panic!("can't read {ICON}: {e}"));
-    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("writer.res");
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("freewriter.res");
     fs::write(&out, resources(&icon)).unwrap();
     println!("cargo:rustc-link-arg-bins={}", out.display());
 }
@@ -99,11 +99,11 @@ fn version_info() -> Vec<u8> {
     }
 
     let texts = [
-        ("FileDescription", "Writer"),
+        ("FileDescription", "FreeWriter"),
         ("FileVersion", version.as_str()),
-        ("InternalName", "writer"),
-        ("OriginalFilename", "writer.exe"),
-        ("ProductName", "Writer"),
+        ("InternalName", "freewriter"),
+        ("OriginalFilename", "freewriter.exe"),
+        ("ProductName", "FreeWriter"),
         ("ProductVersion", version.as_str()),
     ];
     let texts = texts.iter().map(|(key, value)| {

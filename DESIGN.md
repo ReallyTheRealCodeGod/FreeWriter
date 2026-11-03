@@ -1,4 +1,4 @@
-# Writer — design
+# FreeWriter — design
 
 A distraction-free writing app for Windows that works like an old typewriter:
 set a goal, and you're locked onto a blank page until you reach it.
@@ -9,14 +9,14 @@ Rust, with egui/eframe for the window (version pinned in `Cargo.toml`).
 Windows only. Rust toolchain: the GNU host (`x86_64-pc-windows-gnu`), which
 needs no admin rights and no Visual Studio.
 
-The icon and version details (the name "Writer" in Explorer and Task
+The icon and version details (the name "FreeWriter" in Explorer and Task
 Manager) are built into the exe. `build.rs` writes them as a `.res` file
 itself, which the linker takes directly, so no resource compiler (rc.exe or
 windres) is needed. The same icon file gives the windows their icon at run
 time.
 
 `install.ps1` installs it per user, without admin rights: the exe in
-`%LOCALAPPDATA%\Programs\Writer`, a Start menu shortcut, and an entry under
+`%LOCALAPPDATA%\Programs\FreeWriter`, a Start menu shortcut, and an entry under
 Settings > Apps that runs `uninstall.ps1`.
 
 ## Flow
@@ -49,7 +49,7 @@ Time goals are wall-clock minutes.
 ## Escape hatch
 
 Off by default. Turned on in a small settings file
-(`%APPDATA%\writer\settings.toml`); when on, Esc asks for a long fixed
+(`%APPDATA%\FreeWriter\settings.toml`); when on, Esc asks for a long fixed
 sentence, and typing it exactly lets you leave early.
 
 ## Editor
@@ -67,7 +67,7 @@ sentence, and typing it exactly lets you leave early.
 
 ## Saving
 
-- Each page is a plain text file in `Documents\Writing`. Starting Writer
+- Each page is a plain text file in `Documents\Writing`. Starting FreeWriter
   gives a new, blank page. An earlier page can be chosen in the menu and
   written on again; its text stays above the line.
 - A new page is saved from the first word, under the time it was begun
@@ -222,7 +222,7 @@ already won, so a count can't pull you out of it.
 
 One line per session, kept by the app, so it can tell you where you left off.
 
-- **Where:** `%APPDATA%\writer\log.tsv`, next to `settings.toml`. The
+- **Where:** `%APPDATA%\FreeWriter\log.tsv`, next to `settings.toml`. The
   Writing folder stays your prose only, and nothing that globs `*.txt` there
   picks up bookkeeping. It's a plain tab-separated file, readable in a text
   editor or a spreadsheet:
@@ -233,10 +233,10 @@ One line per session, kept by the app, so it can tell you where you left off.
   `result` is `reached`, `left early` (the panic sentence) or `unfinished`
   (the session ended before its goal, e.g. through Task Manager or a crash).
 - **The session file:** while a session runs, its log line is also written
-  to `%APPDATA%\writer\session.tsv` on every autosave, with the page it's
+  to `%APPDATA%\FreeWriter\session.tsv` on every autosave, with the page it's
   on. Leaving properly
   (Esc or closing after the goal, or the panic sentence) moves the line into
-  the log and deletes the file. If the file is still there when Writer
+  the log and deletes the file. If the file is still there when FreeWriter
   starts, the last session didn't end properly: its line goes into the log
   as it stood at the last autosave (at most a few seconds old).
 - **Unfinished sessions come back.** If that leftover session was today and

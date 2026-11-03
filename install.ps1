@@ -1,25 +1,28 @@
 <#
-Installs Writer for the current user, no admin rights needed:
+Installs FreeWriter for the current user, no admin rights needed:
 
-- builds the release and copies writer.exe to %LOCALAPPDATA%\Programs\Writer
-- adds Writer to the Start menu (and to the desktop with -Desktop)
+- builds the release and copies freewriter.exe to %LOCALAPPDATA%\Programs\FreeWriter
+- adds FreeWriter to the Start menu (and to the desktop with -Desktop)
 - lists it under Settings > Apps, where it can be uninstalled
 
-Run it again to update an installed Writer.
+Run it again to update an installed FreeWriter. An install from when the app
+was called Writer is taken away.
 
     powershell -ExecutionPolicy Bypass -File install.ps1 [-Desktop] [-NoBuild]
 #>
 param(
     # Also put a shortcut on the desktop.
     [switch]$Desktop,
-    # Install target\release\writer.exe as it is, without building first.
+    # Install target\release\freewriter.exe as it is, without building first.
     [switch]$NoBuild
 )
 
 $ErrorActionPreference = 'Stop'
-$source = Join-Path $PSScriptRoot 'target\release\writer.exe'
-$folder = Join-Path $env:LOCALAPPDATA 'Programs\Writer'
-$exe = Join-Path $folder 'writer.exe'
+$source = Join-Path $PSScriptRoot 'target\release\freewriter.exe'
+$folder = Join-Path $env:LOCALAPPDATA 'Programs\FreeWriter'
+$exe = Join-Path $folder 'freewriter.exe'
+$oldFolder = Join-Path $env:LOCALAPPDATA 'Programs\Writer'
+$oldExe = Join-Path $oldFolder 'writer.exe'
 
 if (-not $NoBuild) {
     Push-Location $PSScriptRoot
@@ -31,9 +34,22 @@ if (-not $NoBuild) {
     }
 }
 if (-not (Test-Path $source)) { throw "There's no $source to install. Run without -NoBuild." }
-if (Get-Process writer -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }) {
-    throw 'Writer is running. Finish the session, close it and run this again.'
+$running = Get-Process freewriter, writer -ErrorAction SilentlyContinue | Where-Object { $_.Path -in $exe, $oldExe }
+if ($running) {
+    throw 'FreeWriter is running. Finish the session, close it and run this again.'
 }
+
+# The same app under its old name, Writer: its program, shortcuts and entry
+# in Settings > Apps go, so it isn't there twice. A desktop shortcut comes
+# back under the new name.
+$oldDesktop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Writer.lnk'
+$Desktop = $Desktop -or (Test-Path $oldDesktop)
+foreach ($link in (Join-Path ([Environment]::GetFolderPath('Programs')) 'Writer.lnk'), $oldDesktop) {
+    if (Test-Path $link) { Remove-Item $link -Force }
+}
+$oldKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Writer'
+if (Test-Path $oldKey) { Remove-Item $oldKey -Recurse -Force }
+if (Test-Path $oldFolder) { Remove-Item $oldFolder -Recurse -Force }
 
 New-Item -ItemType Directory -Force $folder | Out-Null
 Copy-Item $source $exe -Force
@@ -48,17 +64,17 @@ function New-Shortcut([string]$path) {
     $link.IconLocation = "$exe,0"
     $link.Save()
 }
-New-Shortcut (Join-Path ([Environment]::GetFolderPath('Programs')) 'Writer.lnk')
+New-Shortcut (Join-Path ([Environment]::GetFolderPath('Programs')) 'FreeWriter.lnk')
 if ($Desktop) {
-    New-Shortcut (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Writer.lnk')
+    New-Shortcut (Join-Path ([Environment]::GetFolderPath('Desktop')) 'FreeWriter.lnk')
 }
 
 # The entry in Settings > Apps (Add or remove programs), for this user only.
-$key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Writer'
+$key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\FreeWriter'
 New-Item -Path $key -Force | Out-Null
 $uninstall = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$folder\uninstall.ps1`""
 $texts = @{
-    DisplayName     = 'Writer'
+    DisplayName     = 'FreeWriter'
     DisplayVersion  = (Get-Item $exe).VersionInfo.ProductVersion
     DisplayIcon     = "$exe,0"
     InstallLocation = $folder
@@ -76,5 +92,5 @@ foreach ($name in $numbers.Keys) {
     New-ItemProperty -Path $key -Name $name -Value $numbers[$name] -PropertyType DWord -Force | Out-Null
 }
 
-Write-Host "Writer is installed in $folder."
-Write-Host 'Find it in the Start menu, or search for "Writer".'
+Write-Host "FreeWriter is installed in $folder."
+Write-Host 'Find it in the Start menu, or search for "FreeWriter".'
